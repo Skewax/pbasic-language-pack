@@ -1,0 +1,30 @@
+@top Program { Identifier }
+
+//!{ Newline? command* }
+
+@skip { Space | Comment | Newline }
+
+//!list<content> { "" | content ("," content)* }
+//!
+//!command {
+//!  Identifier list<expr> Newline
+//!}
+//!
+//!expr {
+//!  Identifier |
+//!  String |
+//!  Number
+//!}
+
+@tokens {
+  Identifier { $[a-zA-Z_] $[a-zA-Z_0-9]* }
+  //!Number { $[0-9]+ }
+
+  String { '"' (!["\\] | "\\" _)* '"' }
+
+  Comment { "'" ![\n]* }
+  Space { $[ \t]+ }
+  Newline { $[\n\r]+ }
+
+  ","
+}
