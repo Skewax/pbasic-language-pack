@@ -1,30 +1,23 @@
-@top Program { Identifier }
+@top Program { stmt* }
 
-//!{ Newline? command* }
+@skip { space | comment | newline }
 
-@skip { Space | Comment | Newline }
+stmt { Debug | expr }
+Debug { KW<"debug"> expr }
 
-//!list<content> { "" | content ("," content)* }
-//!
-//!command {
-//!  Identifier list<expr> Newline
-//!}
-//!
-//!expr {
-//!  Identifier |
-//!  String |
-//!  Number
-//!}
+expr { Identifier | String }
+
+KW<name> { @specialize<Identifier, name> }
 
 @tokens {
   Identifier { $[a-zA-Z_] $[a-zA-Z_0-9]* }
-  //!Number { $[0-9]+ }
 
+  Number { -?$[0-9] }
   String { '"' (!["\\] | "\\" _)* '"' }
 
-  Comment { "'" ![\n]* }
-  Space { $[ \t]+ }
-  Newline { $[\n\r]+ }
+  comment { "'" ![\n]* }
+  space { $[ \t]+ }
+  newline { $[\n\r]+ }
 
   ","
 }

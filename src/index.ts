@@ -3,6 +3,7 @@ import {LRLanguage, LanguageSupport, indentNodeProp, foldNodeProp, foldInside, d
 import {styleTags, tags as t} from "@lezer/highlight"
 
 export const PBasic = LRLanguage.define({
+  name: 'pbasic',
   parser: parser.configure({
     props: [
       styleTags({

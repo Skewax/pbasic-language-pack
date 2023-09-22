@@ -7,23 +7,11 @@ import * as path from "path"
 import { fileURLToPath } from 'url';
 let caseDir = path.dirname(fileURLToPath(import.meta.url))
 
-function tostr(tree)
-{
-    let out = tree.type + "";
-
-    for(let children of tree.children.values())
-    {
-      out += '\n\t' + tostr(children);
-    }
-
-    return out;
-}
-
 for (let file of fs.readdirSync(caseDir)) {
   if (!/\.txt$/.test(file)) continue
 
-  let filetext = fs.readFileSync(path.join(caseDir, file), "utf8").toString();
-  console.log(tostr(PBasic.parser.parse(filetext)))
+  // let filetext = fs.readFileSync(path.join(caseDir, file), "utf8").toString();
+  // console.log(tostr(PBasic.parser.parse(filetext)))
 
   let name = /^[^\.]*/.exec(file)[0]
   describe(name, () => {

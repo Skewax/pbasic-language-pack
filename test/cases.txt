@@ -1,5 +1,26 @@
-# Number
-x
+# Nothing
+
 ==>
 
+Program()
+
+
+# Identifier
+
+s 
+==>
 Program(Identifier)
+
+# Identifiers
+
+s x y
+==>
+Program(Identifier, Identifier, Identifier)
+
+# Debugging Simple
+
+debug sus
+
+==>
+
+Program(Debug(KW, Identifier))
