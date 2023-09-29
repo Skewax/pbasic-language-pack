@@ -1,23 +1,104 @@
 @top Program { stmt* }
 
+@precedence {
+
+}
+
 @skip { space | comment | newline }
 
-stmt { Debug | expr }
-Debug { KW<"debug"> expr }
+stmt { 
+  Debug | 
+  For | 
+  LoopUntil | 
+  VarDecl | 
+  Return | 
+  Go | 
+  Gosub | 
+  Assignment |
+  expr 
+}
 
-expr { Identifier | String }
+VarDecl { Identifier VarKW type }
 
-KW<name> { @specialize<Identifier, name> }
+Debug { DebugKW "?"? comma_sep<debuggable_expr> }
+For { ForKW Identifier "=" term ToKW term stmt+ NextKW }
+LoopUntil { DoKW stmt+ LoopKW UntilKW Cond }
+
+Return { ReturnKW }
+Go { GoKW Identifier }
+Gosub { GosubKW Identifier }
+
+Assignment { Identifier "=" expr }
+
+debuggable_expr { expr | String | CrKW }
+expr { Arith | term }
+Cond { term ("=" | ">" | "<" | ">=" | "<=" | "<>") term }
+
+Arith { term (math_op term)+ }
+math_op { Plus | Minus | Mult | Divide }
+
+term { Identifier | Number | paren }
+
+paren { "(" expr ")" }
+type { BitKW | NibKW | ByteKW | WordKW }
+
+comma_sep<item> { item ("," item)* }
+
 
 @tokens {
   Identifier { $[a-zA-Z_] $[a-zA-Z_0-9]* }
 
-  Number { -?$[0-9] }
+  Number { $[0-9]+ }
   String { '"' (!["\\] | "\\" _)* '"' }
 
   comment { "'" ![\n]* }
   space { $[ \t]+ }
   newline { $[\n\r]+ }
 
+  Plus { '+' }
+  Minus { '-' }
+  Mult { '*' }
+  Divide { '/' }
+
   ","
+  "("
+  ")"
+  "="
+  ">"
+  "<"
+  ">="
+  "<="
+  "<>"
+  "?"
 }
+
+@external specialize {Identifier} keyword from "./specialization.ts" {
+  DebugKW,
+
+  BitKW,
+  NibKW,
+  ByteKW,
+  WordKW,
+
+  VarKW,
+
+  CrKW,
+
+  DoneKW,
+  ReturnKW,
+  EndKW,
+
+  DoKW,
+  LoopKW,
+  UntilKW,
+
+  ForKW,
+  ToKW,
+  NextKW,
+
+  GoKW,
+  GosubKW
+
+}
+
+//@detectDelims

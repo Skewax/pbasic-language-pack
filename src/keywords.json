@@ -1,0 +1,30 @@
+{
+    "kws":
+    [
+        "debug",
+
+        "bit",
+        "nib",
+        "byte",
+        "word",
+
+        "var",
+
+        "cr",
+
+        "done",
+        "return",
+        "end",
+
+        "do",
+        "loop",
+        "until",
+
+        "for",
+        "to",
+        "next",
+
+        "go",
+        "gosub"
+    ]
+}

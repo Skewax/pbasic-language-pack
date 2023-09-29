@@ -20,7 +20,128 @@ Program(Identifier, Identifier, Identifier)
 # Debugging Simple
 
 debug sus
+DEBUG sus
+DeBuG sus
+dEbUg sus
 
 ==>
 
-Program(Debug(KW, Identifier))
+Program(
+    Debug(DebugKW, Identifier),
+    Debug(DebugKW, Identifier),
+    Debug(DebugKW, Identifier),
+    Debug(DebugKW, Identifier)
+)
+
+# Variables
+
+x VAR BYTE
+y var word
+z VAR nib
+w var BIT
+
+==>
+
+Program(
+    VarDecl(Identifier, VarKW, ByteKW),
+    VarDecl(Identifier, VarKW, WordKW),
+    VarDecl(Identifier, VarKW, NibKW),
+    VarDecl(Identifier, VarKW, BitKW)
+)
+
+
+# Assignment
+
+x VAR BYTE
+x = 10
+y = 10
+
+==>
+
+Program(
+    VarDecl(Identifier, VarKW, ByteKW),
+    Assignment(Identifier, Number),
+    Assignment(Identifier, Number)
+)
+
+
+# Mathematics
+
+_ = 1 + 1
+_ = 1 + 1 * 1
+_ = 1 - 1 / 1 + 1
+_ = (1 * 1) + 1
+
+==>
+
+Program(
+    Assignment(Identifier, Arith(Number, Plus, Number)),
+    Assignment(Identifier, Arith(Number, Plus, Number, Mult, Number)),
+    Assignment(Identifier, Arith(Number, Minus, Number, Divide, Number, Plus, Number)),
+    Assignment(Identifier, Arith(Arith(Number, Mult, Number), Plus, Number)),
+)
+
+
+# Advanced Debugging
+
+debug ? x
+debug x, cr
+debug x, cr, "Hello World"
+
+==>
+
+Program(
+    Debug(DebugKW, "?", Identifier),
+    Debug(DebugKW, Identifier, CrKW),
+    Debug(DebugKW, Identifier, CrKW, String)
+)
+
+
+# Simple statements
+
+Return
+Go BRUH
+Gosub BRUH
+
+==>
+
+Program(
+    Return(ReturnKW),
+    Go(GoKW, Identifier),
+    Gosub(GosubKW, Identifier)
+)
+
+# Loop Until
+
+DO
+    x = x + 1
+    DEBUG ? x
+LOOP UNTIL x = 10
+
+==>
+
+Program(
+    LoopUntil(
+        DoKW,
+        Assignment(Identifier, Arith(Identifier, Plus, Number)),
+        Debug(DebugKW, "?", Identifier),
+        LoopKW, UntilKW, 
+        Cond(Identifier, "=", Number)
+    )
+)
+
+# For Loop
+
+FOR x = 0 TO 10
+    DEBUG ? x
+NEXT
+
+==>
+
+Program(
+    For(
+        ForKW, Identifier, "=", Number, ToKW, Number,
+        Debug(DebugKW, "?", Identifier),
+        NextKW
+    )
+)
