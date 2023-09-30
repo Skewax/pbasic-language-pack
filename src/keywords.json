@@ -8,7 +8,10 @@
         "byte",
         "word",
 
+        "data",
+
         "var",
+        "con",
 
         "cr",
 
@@ -22,9 +25,22 @@
 
         "for",
         "to",
+        "step",
         "next",
 
+        "if",
+        "then",
+        "else",
+        "elseif",
+        "endif",
+
+        "and",
+        "or",
+        "not",
+
         "go",
-        "gosub"
+        "gosub",
+
+        "pause"
     ]
 }

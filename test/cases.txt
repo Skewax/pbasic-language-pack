@@ -126,7 +126,7 @@ Program(
         Assignment(Identifier, Arith(Identifier, Plus, Number)),
         Debug(DebugKW, "?", Identifier),
         LoopKW, UntilKW, 
-        Cond(Identifier, "=", Number)
+        Logical(Condition(Identifier, "=", Number))
     )
 )
 
@@ -144,4 +144,71 @@ Program(
         Debug(DebugKW, "?", Identifier),
         NextKW
     )
+)
+
+# Labels
+
+Bruh:
+bruh = bruh
+
+==>
+
+Program(Label(Identifier, ":"), Assignment(Identifier, "=", Identifier))
+
+# If Statements 
+
+if x = y then 
+endif
+
+if x = y and not 0 > 1 then
+endif
+
+if 0 = 0 then
+elseif 0 = 0 then
+else endif
+
+==>
+
+Program(
+    If(
+        IfKW,
+        Logical(Condition(Identifier, "=", Identifier)),
+        ThenKW,
+        EndifKW
+    ),
+    If(
+        IfKW,
+        Logical(
+            Condition(Identifier, "=", Identifier), 
+            AndKW, Not(NotKW, Condition(Number, ">", Number))
+        ),
+        ThenKW,
+        EndifKW
+    ),
+    If(
+        IfKW,
+        Logical(Condition(Number, "=", Number)),
+        ThenKW,
+        Elseif(
+            ElseifKW,
+            Logical(Condition(Number, "=", Number)),
+            ThenKW,
+            Else(
+                ElseKW,
+                EndifKW
+            )
+        )
+    )
+)
+
+# Data 
+
+x CON 100
+sus DATA Word 1, Word 2, Word x
+
+==>
+
+Program(
+    ConDecl(Identifier, ConKW, Number),
+    DataDecl(Identifier, DataKW, WordKW, Number, WordKW, Number, WordKW, Identifier)
 )

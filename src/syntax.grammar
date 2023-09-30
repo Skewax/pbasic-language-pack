@@ -10,37 +10,65 @@ stmt {
   Debug | 
   For | 
   LoopUntil | 
+  If |
   VarDecl | 
+  ConDecl |
+  DataDecl |
+
   Return | 
   Go | 
   Gosub | 
+
+  Pause |
+
   Assignment |
+  Label |
   expr 
 }
 
+ConDecl { Identifier ConKW term }
 VarDecl { Identifier VarKW type }
+DataDecl { Identifier DataKW data_lit }
 
 Debug { DebugKW "?"? comma_sep<debuggable_expr> }
-For { ForKW Identifier "=" term ToKW term stmt+ NextKW }
-LoopUntil { DoKW stmt+ LoopKW UntilKW Cond }
+For { ForKW Identifier "=" term ToKW term (StepKW term)? stmt+ NextKW }
+LoopUntil { DoKW stmt+ LoopKW UntilKW Logical }
+Pause { PauseKW lit }
+
+if_tail { Elseif | Else | EndifKW }
+If { IfKW Logical ThenKW stmt* if_tail }
+Elseif { ElseifKW Logical ThenKW stmt* if_tail }
+Else { ElseKW stmt* EndifKW }
+
 
 Return { ReturnKW }
 Go { GoKW Identifier }
 Gosub { GosubKW Identifier }
+End { EndKW }
+
+Label { Identifier ":" }
 
 Assignment { Identifier "=" expr }
 
 debuggable_expr { expr | String | CrKW }
 expr { Arith | term }
-Cond { term ("=" | ">" | "<" | ">=" | "<=" | "<>") term }
+
+Logical { logical_term ((AndKW | OrKW) logical_term)* }
+logical_term {Not | Condition | Paren_Logical}
+Paren_Logical { "(" Logical ")" }
+Not { NotKW Condition }
+Condition { term ("=" | ">" | "<" | ">=" | "<=" | "<>") term }
 
 Arith { term (math_op term)+ }
 math_op { Plus | Minus | Mult | Divide }
 
-term { Identifier | Number | paren }
+term { lit | paren }
+lit { Identifier | Number }
 
 paren { "(" expr ")" }
 type { BitKW | NibKW | ByteKW | WordKW }
+
+data_lit { comma_sep<(type lit)> }
 
 comma_sep<item> { item ("," item)* }
 
@@ -70,6 +98,7 @@ comma_sep<item> { item ("," item)* }
   "<="
   "<>"
   "?"
+  ":"
 }
 
 @external specialize {Identifier} keyword from "./specialization.ts" {
@@ -80,7 +109,10 @@ comma_sep<item> { item ("," item)* }
   ByteKW,
   WordKW,
 
+  DataKW,
+
   VarKW,
+  ConKW,
 
   CrKW,
 
@@ -94,11 +126,23 @@ comma_sep<item> { item ("," item)* }
 
   ForKW,
   ToKW,
+  StepKW,
   NextKW,
 
-  GoKW,
-  GosubKW
+  IfKW,
+  ThenKW,
+  ElseKW,
+  ElseifKW,
+  EndifKW,
 
+  AndKW,
+  OrKW,
+  NotKW,
+
+  GoKW,
+  GosubKW,
+
+  PauseKW
 }
 
 //@detectDelims
