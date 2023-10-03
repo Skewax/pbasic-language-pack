@@ -43,7 +43,7 @@ export function test_for(file: string) {
       out += ")";
 
       if(node.node.nextSibling) out += ", ";
-      else out += "\n" + "  ".repeat(indent - 2)
+      else out += "\n" + "  ".repeat(Math.max(indent - 2, 0))
 
       indent--;
     }
