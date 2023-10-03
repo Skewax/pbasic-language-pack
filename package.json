@@ -6,7 +6,7 @@
   "main": "dist/index.cjs",
   "module": "dist/index.js",
   "scripts": {
-    "sus": "npm run prepare && node ./dist/index.js",
+    "examples": "npm run prepare && node ./dist/index.js --run-examples",
     "test": "npm run prepare && mocha test/test.js",
     "prepare": "rollup -c"
   },

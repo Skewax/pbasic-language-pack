@@ -1,8 +1,7 @@
 import {parser} from "./syntax.grammar"
-import {SyntaxNodeRef} from "@lezer/common"
 import {LRLanguage, LanguageSupport, indentNodeProp, foldNodeProp, foldInside, delimitedIndent} from "@codemirror/language"
 import {styleTags, tags as t} from "@lezer/highlight"
-import {readFileSync} from "fs";
+import { run_examples } from "./examples"
 
 export const PBasic = LRLanguage.define({
   name: 'pbasic',
@@ -24,44 +23,7 @@ export function pbasic() {
   return new LanguageSupport(PBasic)
 }
 
-export function test_for(file: string) {
-  const filetext = readFileSync(file).toString();
-  const tree = parser.parse(filetext);
-
-  let indent = 0;
-  let out = "";
-
-  tree.iterate({
-    enter: function(node: SyntaxNodeRef)
-    {
-      out += "\n" + "  ".repeat(indent) + node.name;
-
-      if(node.node.firstChild)
-      {
-        out += "(";
-        indent++;
-      }
-      else 
-      {
-        out += ": '" + filetext.substring(node.to, node.from) + "'";
-      }
-    },
-
-    leave: function(node: SyntaxNodeRef)
-    {
-      // exit on no children
-      if(node.node.firstChild) 
-      {
-        out += ")";
-        indent--;
-      }
-
-      if(node.node.nextSibling) out += ", ";
-      else out += "\n" + "  ".repeat(Math.max(indent - 1, 0))
-    }
-  });
-
-  console.log(out);
+if(process.argv[2] == "--run-examples")
+{
+  run_examples();
 }
-
-test_for("example-code/ex1.txt")
