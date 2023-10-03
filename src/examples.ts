@@ -2,6 +2,8 @@ import {parser} from "./syntax.grammar";
 import {SyntaxNodeRef} from "@lezer/common";
 import * as fs from "fs";
 
+//⚠ == oopsie
+
 function debug_file(file: string) {
     
     console.log("Debugging " + file + "\n" + "-".repeat(50));
@@ -19,12 +21,12 @@ function debug_file(file: string) {
     
             if(node.node.firstChild)
             {
-            out += "(";
-            indent++;
+                out += "(";
+                indent++;
             }
             else 
             {
-            out += ": '" + filetext.substring(node.to, node.from) + "'";
+                out += ": '" + filetext.substring(node.to, node.from) + "'";
             }
         },
     
@@ -33,8 +35,8 @@ function debug_file(file: string) {
             // exit on no children
             if(node.node.firstChild) 
             {
-            out += ")";
-            indent--;
+                out += ")";
+                indent--;
             }
     
             if(node.node.nextSibling) out += ", ";

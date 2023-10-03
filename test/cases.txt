@@ -122,10 +122,13 @@ LOOP UNTIL x = 10
 
 Program(
     LoopUntil(
-        DoKW,
-        Assignment(Identifier, Arith(Identifier, Plus, Number)),
-        Debug(DebugKW, "?", Identifier),
-        LoopKW, UntilKW, 
+        Loop(
+            DoKW,
+            Assignment(Identifier, Arith(Identifier, Plus, Number)),
+            Debug(DebugKW, "?", Identifier),
+            LoopKW, 
+        ),
+        UntilKW, 
         Logical(Condition(Identifier, "=", Number))
     )
 )

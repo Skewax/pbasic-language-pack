@@ -41,6 +41,15 @@
         "go",
         "gosub",
 
-        "pause"
+        "pause",
+        "rctime",
+
+        "high",
+        "low",
+
+        "freqout",
+        "pulsout",
+
+        "read"
     ]
 }
