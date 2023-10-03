@@ -8,7 +8,7 @@ DO
   DEBUG ? IN6
   DEBUG ? IN0
   IF IN0 = 0 THEN
-    'PULSOUT 14, counter
+    PULSOUT 14, counter
     IF counter > 500 THEN
      counter = counter - 10
     ENDIF

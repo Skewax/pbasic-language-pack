@@ -18,6 +18,7 @@ stmt {
   Return | 
   Go | 
   Gosub | 
+  End |
 
   Pause |
 

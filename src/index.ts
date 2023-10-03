@@ -34,18 +34,30 @@ export function test_for(file: string) {
   tree.iterate({
     enter: function(node: SyntaxNodeRef)
     {
-      out += "\n" + "  ".repeat(indent) + node.name + "(";
-      indent++;
+      out += "\n" + "  ".repeat(indent) + node.name;
+
+      if(node.node.firstChild)
+      {
+        out += "(";
+        indent++;
+      }
+      else 
+      {
+        out += ": '" + filetext.substring(node.to, node.from) + "'";
+      }
     },
 
     leave: function(node: SyntaxNodeRef)
     {
-      out += ")";
+      // exit on no children
+      if(node.node.firstChild) 
+      {
+        out += ")";
+        indent--;
+      }
 
       if(node.node.nextSibling) out += ", ";
-      else out += "\n" + "  ".repeat(Math.max(indent - 2, 0))
-
-      indent--;
+      else out += "\n" + "  ".repeat(Math.max(indent - 1, 0))
     }
   });
 
