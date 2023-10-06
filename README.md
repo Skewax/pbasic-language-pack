@@ -1,0 +1,95 @@
+# PBasic Language Pack
+
+A language pack for CodeMirror built using Lezer designed to provide insight into PBasic v2.5 code.
+
+## Implemented Language Features
+#### AST Parsing
+- [x] General language syntax
+  - [x] Arithmetic expressions
+  - [x] Expression grouping
+  - [x] Significant line endings [^1]
+  - [x] Line ending stand-ins via `:` [^1]
+  - [x] Pattern matching [^1]
+- [x] `VAR / CON` declarations
+  - [x] general syntax
+  - [x] `BIT` / `NIB` / `BYTE` / `WORD`
+  - [ ] `<TYPE>(N)` arrays
+- [x] `.LOWBYTE` / `.HIGHBYTE` [^1]
+- [ ] `AUXIO`
+- [x] `BRANCH` [^1]
+- [ ] `BUTTON`
+- [ ] `COMPARE`
+- [ ] `CONFIGPIN`
+- [ ] `COUNT`
+- [x] `DATA`
+  - [x] named `DATA`
+  - [x] `WORD`-typed `DATA`
+  - [ ] `@address`-ed `DATA`
+  - [ ] reserved `DATA`
+  - [ ] repeated `DATA`
+  - [ ] expressions in `DATA`
+- [x] `DEBUG` / `SER` / `I2C`, `IN` and `OUT` forms
+  - [x] simple `DEBUG`
+  - [ ] all format specifiers
+  - [ ] all special cases
+- [x] `DO ... LOOP`
+  - [ ] `DO WHILE ...`
+  - [x] `DO UNTIL ...`
+  - [ ] `DO ... LOOP WHILE`
+  - [x] `DO ... LOOP UNTIL`
+  - [x] `DO ... LOOP`
+- [ ] `DTMFOUT`
+- [x] `END`
+- [ ] `EXIT`
+- [x] `FOR ... NEXT`
+- [x] `FREQOUT`
+- [ ] `GET`
+- [x] `GOSUB`
+- [x] `GOTO`
+- [x] `HIGH`
+- [x] `IF ... THEN ... ELSE`
+  - [x] `IF ... THEN`
+  - [x] `ELSEIF`
+  - [x] `ELSE`
+- [ ] `INPUT`
+- [ ] `IOTERM`
+- [ ] `LCDCMD`
+- [ ] `LCDIN`
+- [ ] `LCDOUT`
+- [ ] `LOOKDOWN`
+- [ ] `LOOKUP`
+- [x] `LOW`
+- [ ] `MAINIO`
+- [ ] `NAP`
+- [x] `ON ... GOSUB/GOTO` [^1]
+- [x] `OUTPUT`
+- [ ] `OWIN`
+- [ ] `OWOUT`
+- [x] `PAUSE`
+- [ ] `POLL___`
+- [ ] `PULSIN` 
+- [x] `PULSOUT`
+- [ ] `PUT`
+- [ ] `PWM`
+- [ ] `RANDOM`
+- [x] `RCTIME`
+- [x] `READ`
+- [x] `RETURN`
+- [ ] `REVERSE`
+- [ ] `RUN`
+- [x] `SELECT ... CASE` [^1]
+  - [x] Simple cases
+  - [x] Multiple cases
+  - [x] Comparison cases
+  - [x] Range cases
+  - [x] Else case
+- [ ] `SHIFTIN`
+- [ ] `SHIFTOUT`
+- [ ] `SLEEP`
+- [ ] `STOP`
+- [ ] `STORE`
+- [ ] `TOGGLE`
+- [x] `WRITE`
+- [ ] `XOUT`
+
+[^1]: awaiting testing

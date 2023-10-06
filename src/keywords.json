@@ -8,12 +8,18 @@
         "byte",
         "word",
 
+        "lowbyte",
+        "highbyte",
+
         "data",
 
         "var",
         "con",
 
         "cr",
+        "dec",
+        "hex",
+        "bin",
 
         "done",
         "return",
@@ -36,6 +42,7 @@
 
         "and",
         "or",
+        "xor",
         "not",
 
         "go",
@@ -50,6 +57,14 @@
         "freqout",
         "pulsout",
 
-        "read"
+        "read",
+        "write",
+
+        "select",
+        "endselect",
+        "case",
+
+        "branch",
+        "on"
     ]
 }

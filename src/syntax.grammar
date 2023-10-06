@@ -4,12 +4,14 @@
 // C:\Users\rafaed\Downloads\Archive.zip\Robotics 0\simplified navigation
 
 @precedence {
-
+  Char
+  String
 }
 
-@skip { space | comment | newline }
+@skip { space | comment }
 
-stmt { 
+stmt { stmt_type (newline | ":")+ }
+stmt_type { 
   Debug | 
   For | 
   any_loop | 
@@ -36,27 +38,64 @@ stmt {
 
   Assignment |
   Label |
-  expr 
+  expr |
+  newline // empty stmt
 }
 
+// declarations
 ConDecl { Identifier ConKW term }
 VarDecl { Identifier VarKW type }
-DataDecl { Identifier DataKW data_lit }
 
-Debug { DebugKW "?"? comma_sep<debuggable_expr> }
-For { ForKW Identifier "=" term ToKW term (StepKW term)? stmt+ NextKW }
+DataDecl { Identifier? DataKW data_lit }
+data_lit { comma_sep<(type? lit)> | String }
 
-Until { UntilKW Logical }
+// control flow
+
+// for loops
+For { 
+  ForKW Identifier "=" expr ToKW expr (StepKW expr)? 
+    stmt+ 
+  NextKW 
+}
+
+// loops with "do"
+any_loop { LoopUntil | UntilLoop | Loop }
 
 Loop { DoKW stmt+ LoopKW }
 UntilLoop { DoKW Until stmt+ LoopKW }
 LoopUntil { Loop UntilKW Logical }
 
-any_loop { LoopUntil | UntilLoop | Loop }
+Until { UntilKW Logical }
 
+// if statements
+if_tail { Elseif | Else | EndifKW }
+
+If { IfKW Logical ThenKW stmt* if_tail }
+Elseif { ElseifKW Logical ThenKW stmt* if_tail }
+Else { ElseKW stmt* EndifKW }
+
+// select statements
+Select { SelectKW expr Case+ CaseElse? EndselectKW }
+Case { CaseLabel stmt* }
+CaseElse { CaseElseLabel stmt* }
+
+CaseLabel { CaseKW comma_sep<pattern> }
+CaseElseLabel { CaseKW ElseKW }
+
+// branchers
+Branch { BranchKW expr "," "(" comma_sep<Identifier> ")" }
+OnGosub { OnKW expr GosubKW comma_sep<Identifier> }
+OnGoto { OnKW expr GotoKW comma_sep<Identifier> }
+
+// labels
+Label { Identifier ":" }
+
+// general commands
+
+// debug (debug_expr, )+
+Debug { DebugKW comma_sep<debuggable_expr> }
 // pause time
 Pause { PauseKW expr }
-
 // rctime pin, state, var
 RCTime { RCTimeKW lit "," lit "," Identifier }
 
@@ -66,81 +105,119 @@ High { HighKW lit }
 Low { LowKW lit }
 
 // read data_ref, [type] variable
-Read { ReadKW expr "," type? Identifier }
+Read { ReadKW expr "," comma_sep<WordKW? Identifier> }
+Write { WriteKW expr "," comma_sep<WordKW? expr> }
 
 Freqout { FreqoutKW expr "," expr "," expr }
 Pulsout { PulsoutKW expr "," expr }
-
-if_tail { Elseif | Else | EndifKW }
-If { IfKW Logical ThenKW stmt* if_tail }
-Elseif { ElseifKW Logical ThenKW stmt* if_tail }
-Else { ElseKW stmt* EndifKW }
-
 
 Return { ReturnKW }
 Go { GoKW Identifier }
 Gosub { GosubKW Identifier }
 End { EndKW }
 
-Label { Identifier ":" }
-
 Assignment { Identifier "=" expr }
 
-debuggable_expr { expr | String | CrKW }
-expr { Arith | term }
+// debug expressions are wacky
+debuggable_expr { 
+  CrKW | 
+  RawDebuggable | 
+  DecDebuggable | 
+  HexDebuggable | 
+  BinDebuggable | 
+  debuggable_term 
+}
 
-Logical { logical_term ((AndKW | OrKW) logical_term)* }
+debuggable_term { expr | String }
+RawDebuggable { "?" debuggable_expr }
+DecDebuggable { DecKW debuggable_expr }
+HexDebuggable { HexKW debuggable_expr }
+BinDebuggable { BinKW debuggable_expr }
+
+// patterns
+pattern { ValuePattern | ComparisonPattern | RangePattern }
+
+ValuePattern { term }
+ComparisonPattern { comp_op term }
+RangePattern { term ToKW term }
+
+// logical expressions are distinct
+Logical { logical_term ((AndKW | XorKW | OrKW) logical_term)* }
 logical_term {Not | Condition | Paren_Logical}
 Paren_Logical { "(" Logical ")" }
 Not { NotKW Condition }
-Condition { term ("=" | ">" | "<" | ">=" | "<=" | "<>") term }
+Condition { term comp_op term }
+
+comp_op { "=" | ">" | "<" | ">=" | "<=" | "<>" }
+
+// simple expressions
+expr { Arith | term }
 
 Arith { term (math_op term)+ }
-math_op { Plus | Minus | Mult | Divide }
+math_op { Plus | Minus | Mult | Divide | Mult100 | Divide100 }
 
+// terms and literals
 term { lit | paren }
-lit { Identifier | Number }
+lit { LowByte | HighByte | Identifier | Number | Char }
+
+LowByte { Identifier "." LowByteKW }
+HighByte { Identifier "." HighByteKW }
 
 paren { "(" expr ")" }
+
+// types 
 type { BitKW | NibKW | ByteKW | WordKW }
 
-data_lit { comma_sep<(type? lit)> }
-
-comma_sep<item> { item ("," item)* }
-
-Number { decimal_int | binary_int }
+// general utilities
+comma_sep<item> { item ("," newline* item)* }
+Number { decimal_int | binary_int | hex_int }
 
 
 @tokens {
+  // Names
   Identifier { $[a-zA-Z_] $[a-zA-Z_0-9]* }
 
+  // Numbers
   decimal_int { $[0-9]+ }
   binary_int { "%" $[01]+ }
+  hex_int { "$" $[0-9A-Fa-f]+ }
 
+  // Text-based literals
+  Char { '"' (!["\\] | "\\" _) '"' }
   String { '"' (!["\\] | "\\" _)* '"' }
 
+  // Whitespace
   comment { "'" ![\n]* }
   space { $[ \t]+ }
   newline { $[\n\r]+ }
 
+  // Operators
+  // arithmetics
   Plus { '+' }
   Minus { '-' }
   Mult { '*' }
   Divide { '/' }
+  Mult100 { '**' }
+  Divide100 { '/*' }
 
-  ","
-  "("
-  ")"
+  // comparison
   "="
   ">"
   "<"
   ">="
   "<="
   "<>"
+
+  // misc characters
+  ","
+  "("
+  ")"
   "?"
   ":"
+  "."
 }
 
+// Keywords
 @external specialize {Identifier} keyword from "./specialization.ts" {
   DebugKW,
 
@@ -149,12 +226,18 @@ Number { decimal_int | binary_int }
   ByteKW,
   WordKW,
 
+  LowByteKW,
+  HighByteKW,
+
   DataKW,
 
   VarKW,
   ConKW,
 
   CrKW,
+  DecKW,
+  HexKW,
+  BinKW,
 
   DoneKW,
   ReturnKW,
@@ -177,6 +260,7 @@ Number { decimal_int | binary_int }
 
   AndKW,
   OrKW,
+  XorKW,
   NotKW,
 
   GoKW,
@@ -191,7 +275,13 @@ Number { decimal_int | binary_int }
   FreqoutKW,
   PulsoutKW,
 
-  ReadKW
-}
+  ReadKW,
+  WriteKW,
 
-//@detectDelims
+  SelectKW,
+  EndselectKW,
+  CaseKW,
+
+  BranchKW,
+  OnKW
+}
