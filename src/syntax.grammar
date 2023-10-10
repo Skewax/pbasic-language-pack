@@ -1,49 +1,85 @@
-@top Program { stmt* }
+@top Program { stmt* stmt_nosep? }
 
 // NOTE TO SELF: HANDLE FILE 
 // C:\Users\rafaed\Downloads\Archive.zip\Robotics 0\simplified navigation
 
-@precedence {
-  Char
-  String
-}
-
 @skip { space | comment }
 
-stmt { stmt_type (newline | ":")+ }
-stmt_type { 
+stmt { stmt_nosep? stmt_sep }
+stmt_sep { newline | ":" }
+stmt_nosep { 
   Debug | 
   For | 
   any_loop | 
   If |
+  Select |
+
   VarDecl | 
+  PinDecl | 
   ConDecl |
   DataDecl |
 
+  Branch |
+  OnGosub |
+  OnGoto |
+
   Return | 
-  Go | 
+  Goto | 
   Gosub | 
+
   End |
+  Exit |
+  Stop |
 
   Pause |
+  Nap |
+  Sleep |
+
+  Button |
   RCTime |
+
+  Compare |
 
   High |
   Low |
+  Toggle |
+
+  Input |
+  Output |
+  Reverse |
+
+  Configpin |
+  Count |
+
+  Auxio |
+  Mainio |
 
   Freqout |
   Pulsout |
+  Pulsin |
 
   Read |
+  Write |
+  Lookup |
+  Lookdown |
+
+  Get | 
+  Put |
+
+  Store |
+  Run |
+
+  XOut |
+  DTMFOut |
 
   Assignment |
-  Label |
-  expr |
-  newline // empty stmt
+
+  Label
 }
 
 // declarations
 ConDecl { Identifier ConKW term }
+PinDecl { Identifier PinKW term }
 VarDecl { Identifier VarKW type }
 
 DataDecl { Identifier? DataKW data_lit }
@@ -53,19 +89,22 @@ data_lit { comma_sep<(type? lit)> | String }
 
 // for loops
 For { 
-  ForKW Identifier "=" expr ToKW expr (StepKW expr)? 
+  ForKW Identifier "=" expr ToKW expr (StepKW expr)?
     stmt+ 
   NextKW 
 }
 
 // loops with "do"
-any_loop { LoopUntil | UntilLoop | Loop }
+any_loop { LoopUntil | UntilLoop | LoopWhile | WhileLoop | Loop }
 
 Loop { DoKW stmt+ LoopKW }
 UntilLoop { DoKW Until stmt+ LoopKW }
-LoopUntil { Loop UntilKW Logical }
+WhileLoop { DoKW While stmt+ LoopKW }
+LoopUntil { Loop Until }
+LoopWhile { Loop While }
 
 Until { UntilKW Logical }
+While { WhileKW Logical }
 
 // if statements
 if_tail { Elseif | Else | EndifKW }
@@ -83,7 +122,7 @@ CaseLabel { CaseKW comma_sep<pattern> }
 CaseElseLabel { CaseKW ElseKW }
 
 // branchers
-Branch { BranchKW expr "," "(" comma_sep<Identifier> ")" }
+Branch { BranchKW expr "," "[" comma_sep<Identifier> "]" }
 OnGosub { OnKW expr GosubKW comma_sep<Identifier> }
 OnGoto { OnKW expr GotoKW comma_sep<Identifier> }
 
@@ -94,29 +133,100 @@ Label { Identifier ":" }
 
 // debug (debug_expr, )+
 Debug { DebugKW comma_sep<debuggable_expr> }
+
 // pause time
 Pause { PauseKW expr }
+// nap time
+Nap { NapKW expr }
+// sleep time
+Sleep { SleepKW expr }
+
+Compare { CompareKW expr "," Identifier }
+
+// input
+Input { InputKW expr }
+// output
+Output { OutputKW expr }
+// reverse
+Reverse { ReverseKW expr }
+
+Configpin { ConfigPinKW expr "," expr }
+Count { CountKW expr "," expr "," Identifier }
+
+// button pin, downstate, delay, rate, workspace,
+//      targetstate, address
+Button {
+  ButtonKW 
+    expr ","        //pin
+    expr ","        //downstate
+    expr ","        //delay
+    expr ","        //rate
+    Identifier ","  //workspace
+    expr ","        //targetstate
+    Identifier      //address
+}
 // rctime pin, state, var
 RCTime { RCTimeKW lit "," lit "," Identifier }
 
 // high pin
-High { HighKW lit }
+High { HighKW expr }
 // low pin
-Low { LowKW lit }
+Low { LowKW expr }
+// low pin
+Toggle { ToggleKW expr }
 
 // read data_ref, [type] variable
 Read { ReadKW expr "," comma_sep<WordKW? Identifier> }
 Write { WriteKW expr "," comma_sep<WordKW? expr> }
 
+Lookup { 
+  LoopkupKW expr "," LookupTarget "," Identifier
+}
+Lookdown { 
+  LookdownKW expr comp_op? "," LookupTarget "," Identifier
+}
+
+LookupTarget {
+  "[" String "]" |
+  "[" comma_sep<lit> "]"
+}
+
+Get { GetKW expr "," comma_sep<WordKW? Identifier> }
+Put { PutKW expr "," comma_sep<WordKW? Identifier> }
+
+Run { RunKW expr }
+Store { StoreKW expr }
+
 Freqout { FreqoutKW expr "," expr "," expr }
 Pulsout { PulsoutKW expr "," expr }
+Pulsin { PulsinKW expr "," expr "," Identifier }
+
+Auxio { AuxioKW }
+Mainio { MainioKW }
 
 Return { ReturnKW }
-Go { GoKW Identifier }
+Goto { GotoKW Identifier }
 Gosub { GosubKW Identifier }
+
 End { EndKW }
+Exit { ExitKW }
+Stop { StopKW }
 
 Assignment { Identifier "=" expr }
+
+XOut {
+  XOutKW expr "," expr "," "[" comma_sep<XOutParam> "]"
+}
+
+XOutParam {
+  expr "\\" expr ("\\" expr)?
+}
+
+DTMFOut { 
+  DTMFOutKW expr ","        // pin
+    (expr "," expr)?        // on-off time
+    "[" comma_sep<expr> "]" // tones
+}
 
 // debug expressions are wacky
 debuggable_expr { 
@@ -184,7 +294,7 @@ Number { decimal_int | binary_int | hex_int }
 
   // Text-based literals
   Char { '"' (!["\\] | "\\" _) '"' }
-  String { '"' (!["\\] | "\\" _)* '"' }
+  String { '"' (!["\\] | "\\" _) (!["\\] | "\\" _)+ '"' }
 
   // Whitespace
   comment { "'" ![\n]* }
@@ -212,13 +322,18 @@ Number { decimal_int | binary_int | hex_int }
   ","
   "("
   ")"
+  "["
+  "]"
   "?"
   ":"
   "."
+  "\\"
 }
 
 // Keywords
 @external specialize {Identifier} keyword from "./specialization.ts" {
+
+  // [[START KEYWORDS]] //
   DebugKW,
 
   BitKW,
@@ -232,6 +347,7 @@ Number { decimal_int | binary_int | hex_int }
   DataKW,
 
   VarKW,
+  PinKW,
   ConKW,
 
   CrKW,
@@ -242,9 +358,12 @@ Number { decimal_int | binary_int | hex_int }
   DoneKW,
   ReturnKW,
   EndKW,
+  ExitKW,
+  StopKW,
 
   DoKW,
   LoopKW,
+  WhileKW,
   UntilKW,
 
   ForKW,
@@ -263,25 +382,55 @@ Number { decimal_int | binary_int | hex_int }
   XorKW,
   NotKW,
 
-  GoKW,
+  GotoKW,
   GosubKW,
 
   PauseKW,
+  NapKW,
+  SleepKW,
+
+  ButtonKW,
   RCTimeKW,
+
+  CompareKW,
 
   HighKW,
   LowKW,
+  ToggleKW,
+
+  InputKW,
+  OutputKW,
+  ReverseKW,
+
+  ConfigpinKW,
+  CountKW,
 
   FreqoutKW,
+
   PulsoutKW,
+  PulsinKW,
 
   ReadKW,
   WriteKW,
+  LookupKW,
+  LookdownKW,
+
+  GetKW,
+  PutKW,
+
+  RunKW,
+  StoreKW,
 
   SelectKW,
   EndselectKW,
   CaseKW,
 
   BranchKW,
-  OnKW
+  OnKW,
+
+  AuxioKW,
+  MainioKW,
+
+  XOutKW,
+  DTMFOutKW
 }

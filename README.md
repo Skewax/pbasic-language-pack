@@ -7,20 +7,21 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
 - [x] General language syntax
   - [x] Arithmetic expressions
   - [x] Expression grouping
-  - [x] Significant line endings [^1]
-  - [x] Line ending stand-ins via `:` [^1]
-  - [x] Pattern matching [^1]
+  - [x] Significant line endings
+  - [x] Line ending stand-ins via `:`
+  - [x] Pattern matching
+  - [ ] Compile-time if/else, select
 - [x] `VAR / CON` declarations
   - [x] general syntax
   - [x] `BIT` / `NIB` / `BYTE` / `WORD`
   - [ ] `<TYPE>(N)` arrays
-- [x] `.LOWBYTE` / `.HIGHBYTE` [^1]
-- [ ] `AUXIO`
-- [x] `BRANCH` [^1]
-- [ ] `BUTTON`
-- [ ] `COMPARE`
-- [ ] `CONFIGPIN`
-- [ ] `COUNT`
+- [x] `.LOWBYTE` / `.HIGHBYTE`
+- [x] `AUXIO`
+- [x] `BRANCH`
+- [x] `BUTTON`
+- [x] `COMPARE`
+- [x] `CONFIGPIN`
+- [z] `COUNT`
 - [x] `DATA`
   - [x] named `DATA`
   - [x] `WORD`-typed `DATA`
@@ -33,17 +34,17 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
   - [ ] all format specifiers
   - [ ] all special cases
 - [x] `DO ... LOOP`
-  - [ ] `DO WHILE ...`
+  - [x] `DO WHILE ...`
   - [x] `DO UNTIL ...`
-  - [ ] `DO ... LOOP WHILE`
+  - [x] `DO ... LOOP WHILE`
   - [x] `DO ... LOOP UNTIL`
   - [x] `DO ... LOOP`
-- [ ] `DTMFOUT`
+- [x] `DTMFOUT`
 - [x] `END`
-- [ ] `EXIT`
+- [x] `EXIT`
 - [x] `FOR ... NEXT`
 - [x] `FREQOUT`
-- [ ] `GET`
+- [x] `GET`
 - [x] `GOSUB`
 - [x] `GOTO`
 - [x] `HIGH`
@@ -51,33 +52,33 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
   - [x] `IF ... THEN`
   - [x] `ELSEIF`
   - [x] `ELSE`
-- [ ] `INPUT`
+- [x] `INPUT`
 - [ ] `IOTERM`
 - [ ] `LCDCMD`
 - [ ] `LCDIN`
 - [ ] `LCDOUT`
-- [ ] `LOOKDOWN`
-- [ ] `LOOKUP`
+- [x] `LOOKDOWN`
+- [x] `LOOKUP`
 - [x] `LOW`
-- [ ] `MAINIO`
-- [ ] `NAP`
-- [x] `ON ... GOSUB/GOTO` [^1]
+- [x] `MAINIO`
+- [x] `NAP`
+- [x] `ON ... GOSUB/GOTO`
 - [x] `OUTPUT`
 - [ ] `OWIN`
 - [ ] `OWOUT`
 - [x] `PAUSE`
 - [ ] `POLL___`
-- [ ] `PULSIN` 
+- [x] `PULSIN` 
 - [x] `PULSOUT`
-- [ ] `PUT`
+- [x] `PUT`
 - [ ] `PWM`
 - [ ] `RANDOM`
 - [x] `RCTIME`
 - [x] `READ`
 - [x] `RETURN`
-- [ ] `REVERSE`
-- [ ] `RUN`
-- [x] `SELECT ... CASE` [^1]
+- [x] `REVERSE`
+- [x] `RUN`
+- [x] `SELECT ... CASE`
   - [x] Simple cases
   - [x] Multiple cases
   - [x] Comparison cases
@@ -85,11 +86,11 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
   - [x] Else case
 - [ ] `SHIFTIN`
 - [ ] `SHIFTOUT`
-- [ ] `SLEEP`
-- [ ] `STOP`
-- [ ] `STORE`
-- [ ] `TOGGLE`
+- [x] `SLEEP`
+- [x] `STOP`
+- [x] `STORE`
+- [x] `TOGGLE`
 - [x] `WRITE`
-- [ ] `XOUT`
+- [x] `XOUT`
 
-[^1]: awaiting testing
+> Todo: test it all :D

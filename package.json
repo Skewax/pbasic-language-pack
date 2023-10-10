@@ -20,7 +20,8 @@
     "@codemirror/language": "^6.0.0",
     "@lezer/highlight": "^1.0.0",
     "@lezer/lr": "^1.0.0",
-    "@rollup/plugin-json": "^6.0.0"
+    "@rollup/plugin-json": "^6.0.0",
+    "raw-loader": "^4.0.2"
   },
   "devDependencies": {
     "@lezer/generator": "^1.0.0",

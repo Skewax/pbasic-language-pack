@@ -4,19 +4,6 @@
 
 Program()
 
-
-# Identifier
-
-s 
-==>
-Program(Identifier)
-
-# Identifiers
-
-s x y
-==>
-Program(Identifier, Identifier, Identifier)
-
 # Debugging Simple
 
 debug sus
@@ -100,14 +87,14 @@ Program(
 # Simple statements
 
 Return
-Go BRUH
+Goto BRUH
 Gosub BRUH
 
 ==>
 
 Program(
     Return(ReturnKW),
-    Go(GoKW, Identifier),
+    Goto(GotoKW, Identifier),
     Gosub(GosubKW, Identifier)
 )
 
