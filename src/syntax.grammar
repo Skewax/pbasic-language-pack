@@ -8,7 +8,23 @@
 stmt { stmt_nosep? stmt_sep }
 stmt_sep { newline | ":" }
 stmt_nosep { 
-  Debug | 
+
+  Debugin |
+  Debug |
+
+  Serin |
+  Serout |
+
+  I2CIn |
+  I2COut |
+
+  Owin |
+  Owout |
+
+  Lcdin |
+  Lcdout |
+  Lcdcmd |
+
   For | 
   any_loop | 
   If |
@@ -44,6 +60,9 @@ stmt_nosep {
   Low |
   Toggle |
 
+  PWM |
+  Random |
+
   Input |
   Output |
   Reverse |
@@ -53,6 +72,7 @@ stmt_nosep {
 
   Auxio |
   Mainio |
+  Ioterm |
 
   Freqout |
   Pulsout |
@@ -73,6 +93,9 @@ stmt_nosep {
   DTMFOut |
 
   Assignment |
+
+  ShiftIn |
+  ShiftOut |
 
   Label
 }
@@ -131,8 +154,43 @@ Label { Identifier ":" }
 
 // general commands
 
-// debug (debug_expr, )+
-Debug { DebugKW comma_sep<debuggable_expr> }
+// io commands
+Debugin { DebuginKW InputFormatExpr }
+Debug { DebugKW comma_sep<OutputFormatExpr> }
+
+Serin { SerinKW ser_args<InputFormatExpr> }
+Serout { SeroutKW ser_args<OutputFormatExpr> }
+
+ser_args<fmt> {
+  expr ("\\" expr)? ","      // rpin{\fpin}
+  expr ","                   // baudmode
+  (Identifier ",")?          // {plabel}
+  (expr "," Identifier ",")? // {timeout, tlabel}
+  "[" comma_sep<fmt> "]"     // format args
+}
+
+I2CIn { I2CInKW i2c_args<InputFormatExpr> }
+I2COut { I2COutKW i2c_args<OutputFormatExpr> }
+
+i2c_args<fmt> { 
+  expr ","                  // pin 
+  expr ","                  // slave id
+  (expr ("\\" expr)? ",")?  // address / lowaddress
+  "[" comma_sep<fmt> "]"    // formatting data
+}
+
+Owin { OwinKW simple_io_args<InputFormatExpr> }
+Owout { OwoutKW simple_io_args<OutputFormatExpr> }
+
+Lcdin { LcdinKW simple_io_args<InputFormatExpr> }
+Lcdout { LcdoutKW simple_io_args<OutputFormatExpr> }
+Lcdcmd { LcdcmdKW expr "," expr }
+
+simple_io_args<fmt> { 
+  expr ","               // pin 
+  expr ","               // mode
+  "[" comma_sep<fmt> "]" // formatting data
+}
 
 // pause time
 Pause { PauseKW expr }
@@ -175,6 +233,9 @@ Low { LowKW expr }
 // low pin
 Toggle { ToggleKW expr }
 
+PWM { PwmKW expr "," expr "," expr }
+Random { RandomKW Identifier }
+
 // read data_ref, [type] variable
 Read { ReadKW expr "," comma_sep<WordKW? Identifier> }
 Write { WriteKW expr "," comma_sep<WordKW? expr> }
@@ -203,6 +264,7 @@ Pulsin { PulsinKW expr "," expr "," Identifier }
 
 Auxio { AuxioKW }
 Mainio { MainioKW }
+Ioterm { IotermKW expr }
 
 Return { ReturnKW }
 Goto { GotoKW Identifier }
@@ -222,6 +284,21 @@ XOutParam {
   expr "\\" expr ("\\" expr)?
 }
 
+ShiftIn { 
+  ShiftInKW expr "," //dpin 
+    expr ","         //cpin 
+    expr ","         //mode 
+    "[" comma_sep<ShiftArg> "]" //shift args
+}
+ShiftOut { 
+  ShiftOutKW expr "," //dpin 
+    expr ","          //cpin 
+    expr ","          //mode 
+    "[" comma_sep<ShiftArg> "]" //shift args
+}
+
+ShiftArg { Identifier ("\\" expr)? }
+
 DTMFOut { 
   DTMFOutKW expr ","        // pin
     (expr "," expr)?        // on-off time
@@ -229,20 +306,30 @@ DTMFOut {
 }
 
 // debug expressions are wacky
-debuggable_expr { 
-  CrKW | 
-  RawDebuggable | 
-  DecDebuggable | 
-  HexDebuggable | 
-  BinDebuggable | 
-  debuggable_term 
-}
 
-debuggable_term { expr | String }
-RawDebuggable { "?" debuggable_expr }
-DecDebuggable { DecKW debuggable_expr }
-HexDebuggable { HexKW debuggable_expr }
-BinDebuggable { BinKW debuggable_expr }
+// see 'serin' documentation
+InputFormatExpr
+{
+  (std_debug_header | NumKW | SNumKW) Identifier |
+  StrKW Identifier "\\" decimal_int ("\\" decimal_int)? |
+  WaitStrKW Identifier ("\\" decimal_int)? |
+  SkipKW expr |
+  SpstrKW expr 
+}
+OutputFormatExpr 
+{
+  std_debug_header "?"? expr |
+  AscKW "?" expr |
+  StrKW "?"? expr ("\\" expr)? |
+  RepKW expr "\\" expr |
+  expr |
+  String
+}
+std_format_header {
+  DecKW | SDecKW |
+  HexKW | SHexKW | IHexKw | ISHexKW |
+  BinKW | SBinKW | IBinKw | ISBinKW
+}
 
 // patterns
 pattern { ValuePattern | ComparisonPattern | RangePattern }
@@ -261,10 +348,10 @@ Condition { term comp_op term }
 comp_op { "=" | ">" | "<" | ">=" | "<=" | "<>" }
 
 // simple expressions
-expr { Arith | term }
+expr { Arith | term | CrKW }
 
 Arith { term (math_op term)+ }
-math_op { Plus | Minus | Mult | Divide | Mult100 | Divide100 }
+math_op { Plus | Minus | Mult | Divide | Mult100 | Divide100 | Shl | Shr }
 
 // terms and literals
 term { lit | paren }
@@ -309,6 +396,8 @@ Number { decimal_int | binary_int | hex_int }
   Divide { '/' }
   Mult100 { '**' }
   Divide100 { '/*' }
+  Shl { '>>' }
+  Shr { '<<' }
 
   // comparison
   "="
@@ -335,6 +424,20 @@ Number { decimal_int | binary_int | hex_int }
 
   // [[START KEYWORDS]] //
   DebugKW,
+  DebuginKW,
+
+  I2CInKW,
+  I2COutKW,
+
+  SerinKW,
+  SeroutKW,
+
+  OwinKW,
+  OwoutKW,
+
+  LcdinKW,
+  LcdoutKW,
+  LcdcmdKW,
 
   BitKW,
   NibKW,
@@ -351,9 +454,17 @@ Number { decimal_int | binary_int | hex_int }
   ConKW,
 
   CrKW,
-  DecKW,
-  HexKW,
-  BinKW,
+
+  StrKW,
+  RepKW,
+  
+  NumKW,
+  SNumKW,
+  WaitStrKW,
+  SkipKW,
+  SpstrKW,
+
+  AscKW,
 
   DoneKW,
   ReturnKW,
@@ -398,6 +509,9 @@ Number { decimal_int | binary_int | hex_int }
   LowKW,
   ToggleKW,
 
+  PwmKW,
+  RandomKW,
+
   InputKW,
   OutputKW,
   ReverseKW,
@@ -430,7 +544,30 @@ Number { decimal_int | binary_int | hex_int }
 
   AuxioKW,
   MainioKW,
+  IotermKW,
 
   XOutKW,
   DTMFOutKW
+  
+  // [[END KEYWORDS]] //
+}
+
+
+@external specialize {Identifier} format_keyword from "./specialization.ts" {
+  // [[START FORMAT KEYWORDS]] //
+
+  DecKW,
+  SDecKW,
+
+  HexKW,
+  SHexKW,
+  IHexKW,
+  ISHexKW
+
+  BinKW,
+  SBinKW,
+  IBinKw,
+  ISBinKW,
+
+  // [[END FORMAT KEYWORDS]] //
 }

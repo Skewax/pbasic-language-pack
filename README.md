@@ -21,7 +21,7 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
 - [x] `BUTTON`
 - [x] `COMPARE`
 - [x] `CONFIGPIN`
-- [z] `COUNT`
+- [x] `COUNT`
 - [x] `DATA`
   - [x] named `DATA`
   - [x] `WORD`-typed `DATA`
@@ -29,10 +29,10 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
   - [ ] reserved `DATA`
   - [ ] repeated `DATA`
   - [ ] expressions in `DATA`
-- [x] `DEBUG` / `SER` / `I2C`, `IN` and `OUT` forms
+- [x] `DEBUG` / `SER` / `I2C` / `LCD`, `IN` and `OUT` forms
   - [x] simple `DEBUG`
-  - [ ] all format specifiers
-  - [ ] all special cases
+  - [x] all format specifiers
+  - [x] all special cases
 - [x] `DO ... LOOP`
   - [x] `DO WHILE ...`
   - [x] `DO UNTIL ...`
@@ -53,10 +53,8 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
   - [x] `ELSEIF`
   - [x] `ELSE`
 - [x] `INPUT`
-- [ ] `IOTERM`
-- [ ] `LCDCMD`
-- [ ] `LCDIN`
-- [ ] `LCDOUT`
+- [x] `IOTERM`
+- [x] `LCDCMD`
 - [x] `LOOKDOWN`
 - [x] `LOOKUP`
 - [x] `LOW`
@@ -64,15 +62,15 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
 - [x] `NAP`
 - [x] `ON ... GOSUB/GOTO`
 - [x] `OUTPUT`
-- [ ] `OWIN`
-- [ ] `OWOUT`
+- [x] `OWIN`
+- [x] `OWOUT`
 - [x] `PAUSE`
 - [ ] `POLL___`
 - [x] `PULSIN` 
 - [x] `PULSOUT`
 - [x] `PUT`
-- [ ] `PWM`
-- [ ] `RANDOM`
+- [x] `PWM`
+- [x] `RANDOM`
 - [x] `RCTIME`
 - [x] `READ`
 - [x] `RETURN`
@@ -84,8 +82,8 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
   - [x] Comparison cases
   - [x] Range cases
   - [x] Else case
-- [ ] `SHIFTIN`
-- [ ] `SHIFTOUT`
+- [x] `SHIFTIN`
+- [x] `SHIFTOUT`
 - [x] `SLEEP`
 - [x] `STOP`
 - [x] `STORE`

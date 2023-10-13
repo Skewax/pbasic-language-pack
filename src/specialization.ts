@@ -2,17 +2,17 @@ import { Stack } from "@lezer/lr"
 import * as fs from "fs"
 
 // read keywords from grammar file
-function readKeywords(grammar: string): string[]
+function readKeywords(header_name: string, grammar: string): string[]
 {
-    const match = grammar.match(/\[\[START KEYWORDS\]\]/);
+    const reg = RegExp(
+        `\\[\\[START ${header_name}\\]\\].+\\[\\[END ${header_name}\\]\\]`
+    );
+    const match = grammar.match(reg);
 
     if(match === null) 
         return [];
 
-    let {index: start} = match;
-    start = start || 0;
-
-    const keywords = grammar.substring(start).match(/[\w\d_]+KW/g);
+    const keywords = match[0].match(/[\w\d_]+KW/g);
 
     if(keywords === null)
         return [];
@@ -45,18 +45,39 @@ type TermMap = {[name: string]: number};
 // read keyword map
 const kwMap: TermMap = convertToTermMap(
     readKeywords(
+        'KEYWORDS',
         // TODO: how can i include this in a portable way?
         fs.readFileSync('src/syntax.grammar').toString()
     )
 );
-
-console.log(kwMap);
+const formatKwMap: TermMap = convertToTermMap(
+    readKeywords(
+        'FORMAT KEYWORDS',
+        // TODO: how can i include this in a portable way?
+        fs.readFileSync('src/syntax.grammar').toString()
+    )
+);
 
 // actual specialization logic
 export function keyword(value: string, stack: Stack) 
 {
     const key = value.toLowerCase();
     if(kwMap[key]) return kwMap[key];
+    
+    return -1;
+};
+
+export function format_keyword(value: string, stack: Stack) 
+{
+    let key = value.toLowerCase();
+
+    // remove ending digits
+    while(/\d/.test(key[key.length - 1]))
+    {
+        key = key.substring(0, key.length - 1);
+    }
+
+    if(formatKwMap[key]) return formatKwMap[key];
     
     return -1;
 };
