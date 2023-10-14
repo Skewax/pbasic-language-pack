@@ -10,11 +10,12 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
   - [x] Significant line endings
   - [x] Line ending stand-ins via `:`
   - [x] Pattern matching
-  - [ ] Compile-time if/else, select
+  - [x] Compile-time if/else, select 
+  *NOTE*: all compile-time information is currently shoved under the 'Preprocessor' token
 - [x] `VAR / CON` declarations
   - [x] general syntax
   - [x] `BIT` / `NIB` / `BYTE` / `WORD`
-  - [ ] `<TYPE>(N)` arrays
+  - [x] `<TYPE>(N)` arrays
 - [x] `.LOWBYTE` / `.HIGHBYTE`
 - [x] `AUXIO`
 - [x] `BRANCH`
@@ -25,10 +26,10 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
 - [x] `DATA`
   - [x] named `DATA`
   - [x] `WORD`-typed `DATA`
-  - [ ] `@address`-ed `DATA`
-  - [ ] reserved `DATA`
-  - [ ] repeated `DATA`
-  - [ ] expressions in `DATA`
+  - [x] `@address`-ed `DATA`
+  - [x] reserved `DATA`
+  - [x] repeated `DATA`
+  - [x] expressions in `DATA`
 - [x] `DEBUG` / `SER` / `I2C` / `LCD`, `IN` and `OUT` forms
   - [x] simple `DEBUG`
   - [x] all format specifiers
@@ -65,7 +66,7 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
 - [x] `OWIN`
 - [x] `OWOUT`
 - [x] `PAUSE`
-- [ ] `POLL___`
+- [x] `POLL___`
 - [x] `PULSIN` 
 - [x] `PULSOUT`
 - [x] `PUT`

@@ -54,6 +54,12 @@ stmt_nosep {
   Button |
   RCTime |
 
+  Pollin | 
+  Pollout |
+  Pollrun |
+  Pollwait |
+  Pollmode |
+
   Compare |
 
   High |
@@ -106,7 +112,9 @@ PinDecl { Identifier PinKW term }
 VarDecl { Identifier VarKW type }
 
 DataDecl { Identifier? DataKW data_lit }
-data_lit { comma_sep<(type? lit)> | String }
+data_lit { comma_sep<WordKW? expr | DataLoc | DataAlloc> | String }
+DataLoc { "@" decimal_int }
+DataAlloc { WordKW? expr? "(" decimal_int ")" }
 
 // control flow
 
@@ -226,6 +234,12 @@ Button {
 // rctime pin, state, var
 RCTime { RCTimeKW lit "," lit "," Identifier }
 
+Pollin { PollinKW expr "," expr }
+Pollout { PolloutKW expr "," expr }
+Pollrun { PollrunKW expr }
+Pollwait { PollwaitKW expr }
+Pollmode { PollmodeKW expr }
+
 // high pin
 High { HighKW expr }
 // low pin
@@ -274,7 +288,7 @@ End { EndKW }
 Exit { ExitKW }
 Stop { StopKW }
 
-Assignment { Identifier "=" expr }
+Assignment { (ArrayIndex<Identifier> | Identifier) "=" expr }
 
 XOut {
   XOutKW expr "," expr "," "[" comma_sep<XOutParam> "]"
@@ -310,7 +324,7 @@ DTMFOut {
 // see 'serin' documentation
 InputFormatExpr
 {
-  (std_debug_header | NumKW | SNumKW) Identifier |
+  (std_format_header | NumKW | SNumKW) Identifier |
   StrKW Identifier "\\" decimal_int ("\\" decimal_int)? |
   WaitStrKW Identifier ("\\" decimal_int)? |
   SkipKW expr |
@@ -318,7 +332,7 @@ InputFormatExpr
 }
 OutputFormatExpr 
 {
-  std_debug_header "?"? expr |
+  std_format_header "?"? expr |
   AscKW "?" expr |
   StrKW "?"? expr ("\\" expr)? |
   RepKW expr "\\" expr |
@@ -327,8 +341,8 @@ OutputFormatExpr
 }
 std_format_header {
   DecKW | SDecKW |
-  HexKW | SHexKW | IHexKw | ISHexKW |
-  BinKW | SBinKW | IBinKw | ISBinKW
+  HexKW | SHexKW | IHexKW | ISHexKW |
+  BinKW | SBinKW | IBinKW | ISBinKW
 }
 
 // patterns
@@ -354,7 +368,9 @@ Arith { term (math_op term)+ }
 math_op { Plus | Minus | Mult | Divide | Mult100 | Divide100 | Shl | Shr }
 
 // terms and literals
-term { lit | paren }
+term { ArrayIndex<term> | lit | paren }
+
+ArrayIndex<base> { base "(" expr ")" }
 lit { LowByte | HighByte | Identifier | Number | Char }
 
 LowByte { Identifier "." LowByteKW }
@@ -363,7 +379,9 @@ HighByte { Identifier "." HighByteKW }
 paren { "(" expr ")" }
 
 // types 
-type { BitKW | NibKW | ByteKW | WordKW }
+type { ArrayType | base_type }
+ArrayType { base_type "(" decimal_int ")" }
+base_type { BitKW | NibKW | ByteKW | WordKW }
 
 // general utilities
 comma_sep<item> { item ("," newline* item)* }
@@ -387,6 +405,9 @@ Number { decimal_int | binary_int | hex_int }
   comment { "'" ![\n]* }
   space { $[ \t]+ }
   newline { $[\n\r]+ }
+
+  // Preprocessor
+  Preprocessor { "#" ![\n]* }
 
   // Operators
   // arithmetics
@@ -417,6 +438,7 @@ Number { decimal_int | binary_int | hex_int }
   ":"
   "."
   "\\"
+  "@"
 }
 
 // Keywords
@@ -502,6 +524,12 @@ Number { decimal_int | binary_int | hex_int }
 
   ButtonKW,
   RCTimeKW,
+
+  PollinKW,
+  PolloutKW,
+  PollrunKW,
+  PollwaitKW,
+  PollmodeKW,
 
   CompareKW,
 
