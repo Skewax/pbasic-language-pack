@@ -1,4 +1,4 @@
-import {parser} from "./syntax.grammar";
+import {pbasic_parser} from "../dist/index.cjs";
 import {SyntaxNodeRef} from "@lezer/common";
 import * as fs from "fs";
 
@@ -8,8 +8,8 @@ function debug_file(file: string) {
     
     console.log("Debugging " + file + "\n" + "-".repeat(50));
 
-    const filetext = fs.readFileSync("example-code/" + file).toString();
-    const tree = parser.parse(filetext);
+    const filetext = fs.readFileSync("./example-code/examples/" + file).toString();
+    const tree = pbasic_parser.parse(filetext);
   
     let indent = 0;
     let out = "";
@@ -48,15 +48,15 @@ function debug_file(file: string) {
 }
 
 export function run_examples() {
-    let to_run = []
+    let to_run: string[] = []
 
-    if(process.argv.length === 3)
+    if(process.argv.length === 2)
     {
-        to_run = fs.readdirSync("./example-code");
+        to_run = fs.readdirSync("./example-code/examples");
     }
     else 
     {
-        to_run = process.argv.slice(3);
+        to_run = process.argv.slice(2);
     }
 
     for(let file of to_run)
@@ -64,3 +64,5 @@ export function run_examples() {
         debug_file(file);
     }
 }
+
+run_examples();

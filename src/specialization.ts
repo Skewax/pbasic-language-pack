@@ -1,21 +1,24 @@
 import { Stack } from "@lezer/lr"
-import * as fs from "fs"
+import grammar_text from "./syntax.grammar.txt"
 
 // read keywords from grammar file
 function readKeywords(header_name: string, grammar: string): string[]
 {
-    const reg = RegExp(
-        `\\[\\[START ${header_name}\\]\\].+\\[\\[END ${header_name}\\]\\]`
-    );
-    const match = grammar.match(reg);
+    const start = `START ${header_name}`
+    const end = `END ${header_name}`
 
-    if(match === null) 
-        return [];
+    const start_index = grammar.match(start)?.index;
+    const end_index = grammar.match(end)?.index;
 
-    const keywords = match[0].match(/[\w\d_]+KW/g);
+    const match = grammar.substring(start_index ?? 0, end_index)
+
+    const keywords = match.match(/[\w\d_]+KW/gm);
+    console.log(keywords);
 
     if(keywords === null)
+    {
         return [];
+    }
 
     keywords.forEach((value, index) => 
     {
@@ -28,13 +31,15 @@ function readKeywords(header_name: string, grammar: string): string[]
 }
 
 // convert string list to mapping
-function convertToTermMap(arr: string[]): TermMap
+function convertToTermMap(arr: string[], offset?: number | null): TermMap
 {
+    offset = offset ?? 0;
+
     let out: TermMap = {};
 
     for(let i = 0; i < arr.length; i++)
     {
-        out[arr[i]] = i + 1;
+        out[arr[i]] = i + 1 + offset;
     }
 
     return out;
@@ -43,20 +48,19 @@ function convertToTermMap(arr: string[]): TermMap
 type TermMap = {[name: string]: number};
 
 // read keyword map
-const kwMap: TermMap = convertToTermMap(
-    readKeywords(
-        'KEYWORDS',
-        // TODO: how can i include this in a portable way?
-        fs.readFileSync('src/syntax.grammar').toString()
-    )
+export const kws = readKeywords(
+    'KEYWORDS', grammar_text
 );
-const formatKwMap: TermMap = convertToTermMap(
-    readKeywords(
-        'FORMAT KEYWORDS',
-        // TODO: how can i include this in a portable way?
-        fs.readFileSync('src/syntax.grammar').toString()
-    )
+export const kwTypes = kws.map(x => x.at(0)?.toUpperCase() + x.substring(1) + 'KW');
+
+const kwMap: TermMap = convertToTermMap(kws);
+
+export const formatKWs = readKeywords(
+    'FORMAT KEYWORDS', grammar_text
 );
+export const formatKWTypes = formatKWs.map(x => x.at(0)?.toUpperCase() + x.substring(1) + 'KW');
+
+const formatKwMap: TermMap = convertToTermMap(formatKWs, kws.length);
 
 // actual specialization logic
 export function keyword(value: string, stack: Stack) 
