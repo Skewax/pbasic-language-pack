@@ -1,6 +1,6 @@
 import {EditorView, basicSetup} from "codemirror"
 import {PBasic, pbasic} from "../dist"
-import { language, syntaxTree } from "@codemirror/language"
+import { codeFolding, language, syntaxTree } from "@codemirror/language"
 
 import {keymap, highlightSpecialChars, drawSelection, highlightActiveLine, dropCursor,
   rectangularSelection, crosshairCursor,
@@ -28,20 +28,12 @@ let editor = new EditorView({
     EditorState.allowMultipleSelections.of(true),
     pbasic(),
     lintGutter(),
-    linter(view => {
-      let diagnostics: Diagnostic[] = []
-      syntaxTree(view.state).cursor().iterate(node => {
-        if (node.name == "⚠") diagnostics.push({
-          from: node.from,
-          to: node.to,
-          severity: "error",
-          message: "!"
-        })
-      })
-      return diagnostics
-    }),
+    codeFolding(),
+    foldGutter(),
     keymap.of([
-      ...lintKeymap
+      ...defaultKeymap,
+      ...lintKeymap,
+      ...foldKeymap
     ])
   ],
   parent: document.body

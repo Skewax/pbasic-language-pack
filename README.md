@@ -93,3 +93,8 @@ A language pack for CodeMirror built using Lezer designed to provide insight int
 - [x] `XOUT`
 
 > Todo: test it all :D
+
+FAQ:
+
+- Use `syntaxTree()` to get the syntax tree from a editor state. THere is no obvious documentation which states this >:(
+- Many of the necessary types for interfacing with the library are private, so sometimes using `type PrivType = Parameters<fnWithPrivType>[0];` will be necessary

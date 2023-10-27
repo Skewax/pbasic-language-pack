@@ -1,36 +1,44 @@
 import { Stack } from "@lezer/lr"
 import grammar_text from "./syntax.grammar.txt"
 
-// read keywords from grammar file
+/**
+ * Read keywords in a provided group from the given grammar.
+ */
 function readKeywords(header_name: string, grammar: string): string[]
 {
+    // Get the text inside the given header
     const start = `START ${header_name}`
     const end = `END ${header_name}`
 
-    const start_index = grammar.match(start)?.index;
-    const end_index = grammar.match(end)?.index;
+    const start_index = grammar.match(start)?.index
+    const end_index = grammar.match(end)?.index
 
     const match = grammar.substring(start_index ?? 0, end_index)
 
-    const keywords = match.match(/[\w\d_]+KW/gm);
-    console.log(keywords);
+    // Get all keywords defined within the region
+    const keywords = match.match(/[\w\d_]+KW/gm)
 
+    // If none were found, return empty
     if(keywords === null)
     {
-        return [];
+        return []
     }
 
+    // For each keyword found, modify it to be in lowercase, 
+    // keyword-only form.
     keywords.forEach((value, index) => 
     {
         keywords[index] = value
             .substring(0, value.length - 2)
-            .toLowerCase();
-    });
+            .toLowerCase()
+    })
 
-    return keywords;
+    return keywords
 }
 
-// convert string list to mapping
+/**
+ * Convert the given word list to a term map
+ */
 function convertToTermMap(arr: string[], offset?: number | null): TermMap
 {
     offset = offset ?? 0;
@@ -45,9 +53,12 @@ function convertToTermMap(arr: string[], offset?: number | null): TermMap
     return out;
 }
 
+/**
+ * An associative map of terms to ids
+ */
 type TermMap = {[name: string]: number};
 
-// read keyword map
+// Standard keyword map
 export const kws = readKeywords(
     'KEYWORDS', grammar_text
 );
@@ -55,6 +66,7 @@ export const kwTypes = kws.map(x => x.at(0)?.toUpperCase() + x.substring(1) + 'K
 
 const kwMap: TermMap = convertToTermMap(kws);
 
+// Format keyword map
 export const formatKWs = readKeywords(
     'FORMAT KEYWORDS', grammar_text
 );
@@ -62,7 +74,9 @@ export const formatKWTypes = formatKWs.map(x => x.at(0)?.toUpperCase() + x.subst
 
 const formatKwMap: TermMap = convertToTermMap(formatKWs, kws.length);
 
-// actual specialization logic
+/**
+ * Specialize for standard keywords
+ */
 export function keyword(value: string, stack: Stack) 
 {
     const key = value.toLowerCase();
@@ -71,6 +85,9 @@ export function keyword(value: string, stack: Stack)
     return -1;
 };
 
+/**
+ * Specialize for format keywords
+ */
 export function format_keyword(value: string, stack: Stack) 
 {
     let key = value.toLowerCase();

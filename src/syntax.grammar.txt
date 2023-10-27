@@ -107,12 +107,12 @@ stmt_nosep {
 }
 
 // declarations
-ConDecl { Identifier ConKW term }
-PinDecl { Identifier PinKW term }
-VarDecl { Identifier VarKW type }
+ConDecl { Defident ConKW term }
+PinDecl { Defident PinKW term }
+VarDecl { Defident VarKW type }
 
-DataDecl { Identifier? DataKW data_lit }
-data_lit { comma_sep<DataAlloc | (WordKW? expr ~data_alloc) | DataLoc> | String }
+DataDecl { Defident? DataKW DataLit }
+DataLit { comma_sep<DataAlloc | (WordKW? expr ~data_alloc) | DataLoc> | String }
 DataLoc { "@" decimal_int }
 
 // TODO: this conflicts very oddly with ArrayIndex! How should this be approached?
@@ -122,28 +122,32 @@ DataAlloc { WordKW? lit ~data_alloc "(" decimal_int ")" }
 
 // for loops
 For { 
-  ForKW Identifier "=" expr ToKW expr (StepKW expr)?
+  ForHeader
     stmt+ 
   NextKW 
 }
+ForHeader { ForKW Identifier "=" expr ToKW expr (StepKW expr)? }
 
 // loops with "do"
 any_loop { LoopUntil | UntilLoop | LoopWhile | WhileLoop | Loop }
 
 Loop { DoKW stmt+ LoopKW }
-UntilLoop { DoKW Until stmt+ LoopKW }
-WhileLoop { DoKW While stmt+ LoopKW }
+UntilLoop { DoUntil stmt+ LoopKW }
+WhileLoop { DoWhile stmt+ LoopKW }
 LoopUntil { Loop Until }
 LoopWhile { Loop While }
+
+DoUntil { DoKW Until }
+DoWhile { DoKW While }
 
 Until { UntilKW Logical }
 While { WhileKW Logical }
 
 // if statements
-if_tail { Elseif | Else | EndifKW }
+IfTail { Elseif | Else | EndifKW }
 
-If { IfKW Logical ThenKW stmt* if_tail }
-Elseif { ElseifKW Logical ThenKW stmt* if_tail }
+If { IfKW Logical ThenKW stmt* IfTail }
+Elseif { ElseifKW Logical ThenKW stmt* IfTail }
 Else { ElseKW stmt* EndifKW }
 
 // select statements
@@ -160,7 +164,7 @@ OnGosub { OnKW expr GosubKW comma_sep<Identifier> }
 OnGoto { OnKW expr GotoKW comma_sep<Identifier> }
 
 // labels
-Label { Identifier ":" }
+Label { Defident ":" }
 
 // general commands
 
@@ -389,6 +393,7 @@ base_type { BitKW | NibKW | ByteKW | WordKW }
 comma_sep<item> { item ("," newline* item)* }
 Number { decimal_int | binary_int | hex_int }
 
+Defident { Identifier }
 
 @tokens {
   // Names
