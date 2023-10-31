@@ -9911,7 +9911,7 @@
            }
        });
    }
-   const baseTheme$1$1 = /*@__PURE__*/buildTheme("." + baseThemeID, {
+   const baseTheme$1$2 = /*@__PURE__*/buildTheme("." + baseThemeID, {
        "&": {
            position: "relative !important",
            boxSizing: "border-box",
@@ -11434,7 +11434,7 @@
        mountStyles() {
            this.styleModules = this.state.facet(styleModule);
            let nonce = this.state.facet(EditorView.cspNonce);
-           StyleModule.mount(this.root, this.styleModules.concat(baseTheme$1$1).reverse(), nonce ? { nonce } : undefined);
+           StyleModule.mount(this.root, this.styleModules.concat(baseTheme$1$2).reverse(), nonce ? { nonce } : undefined);
        }
        readMeasured() {
            if (this.updateState == 2 /* UpdateState.Updating */)
@@ -17447,6 +17447,703 @@
    }
 
    /**
+   Facet that defines a way to provide a function that computes the
+   appropriate indentation depth, as a column number (see
+   [`indentString`](https://codemirror.net/6/docs/ref/#language.indentString)), at the start of a given
+   line. A return value of `null` indicates no indentation can be
+   determined, and the line should inherit the indentation of the one
+   above it. A return value of `undefined` defers to the next indent
+   service.
+   */
+   const indentService = /*@__PURE__*/Facet.define();
+   /**
+   Facet for overriding the unit by which indentation happens. Should
+   be a string consisting either entirely of the same whitespace
+   character. When not set, this defaults to 2 spaces.
+   */
+   const indentUnit = /*@__PURE__*/Facet.define({
+       combine: values => {
+           if (!values.length)
+               return "  ";
+           let unit = values[0];
+           if (!unit || /\S/.test(unit) || Array.from(unit).some(e => e != unit[0]))
+               throw new Error("Invalid indent unit: " + JSON.stringify(values[0]));
+           return unit;
+       }
+   });
+   /**
+   Return the _column width_ of an indent unit in the state.
+   Determined by the [`indentUnit`](https://codemirror.net/6/docs/ref/#language.indentUnit)
+   facet, and [`tabSize`](https://codemirror.net/6/docs/ref/#state.EditorState^tabSize) when that
+   contains tabs.
+   */
+   function getIndentUnit(state) {
+       let unit = state.facet(indentUnit);
+       return unit.charCodeAt(0) == 9 ? state.tabSize * unit.length : unit.length;
+   }
+   /**
+   Create an indentation string that covers columns 0 to `cols`.
+   Will use tabs for as much of the columns as possible when the
+   [`indentUnit`](https://codemirror.net/6/docs/ref/#language.indentUnit) facet contains
+   tabs.
+   */
+   function indentString(state, cols) {
+       let result = "", ts = state.tabSize, ch = state.facet(indentUnit)[0];
+       if (ch == "\t") {
+           while (cols >= ts) {
+               result += "\t";
+               cols -= ts;
+           }
+           ch = " ";
+       }
+       for (let i = 0; i < cols; i++)
+           result += ch;
+       return result;
+   }
+   /**
+   Get the indentation, as a column number, at the given position.
+   Will first consult any [indent services](https://codemirror.net/6/docs/ref/#language.indentService)
+   that are registered, and if none of those return an indentation,
+   this will check the syntax tree for the [indent node
+   prop](https://codemirror.net/6/docs/ref/#language.indentNodeProp) and use that if found. Returns a
+   number when an indentation could be determined, and null
+   otherwise.
+   */
+   function getIndentation(context, pos) {
+       if (context instanceof EditorState)
+           context = new IndentContext(context);
+       for (let service of context.state.facet(indentService)) {
+           let result = service(context, pos);
+           if (result !== undefined)
+               return result;
+       }
+       let tree = syntaxTree(context.state);
+       return tree.length >= pos ? syntaxIndentation(context, tree, pos) : null;
+   }
+   /**
+   Indentation contexts are used when calling [indentation
+   services](https://codemirror.net/6/docs/ref/#language.indentService). They provide helper utilities
+   useful in indentation logic, and can selectively override the
+   indentation reported for some lines.
+   */
+   class IndentContext {
+       /**
+       Create an indent context.
+       */
+       constructor(
+       /**
+       The editor state.
+       */
+       state, 
+       /**
+       @internal
+       */
+       options = {}) {
+           this.state = state;
+           this.options = options;
+           this.unit = getIndentUnit(state);
+       }
+       /**
+       Get a description of the line at the given position, taking
+       [simulated line
+       breaks](https://codemirror.net/6/docs/ref/#language.IndentContext.constructor^options.simulateBreak)
+       into account. If there is such a break at `pos`, the `bias`
+       argument determines whether the part of the line line before or
+       after the break is used.
+       */
+       lineAt(pos, bias = 1) {
+           let line = this.state.doc.lineAt(pos);
+           let { simulateBreak, simulateDoubleBreak } = this.options;
+           if (simulateBreak != null && simulateBreak >= line.from && simulateBreak <= line.to) {
+               if (simulateDoubleBreak && simulateBreak == pos)
+                   return { text: "", from: pos };
+               else if (bias < 0 ? simulateBreak < pos : simulateBreak <= pos)
+                   return { text: line.text.slice(simulateBreak - line.from), from: simulateBreak };
+               else
+                   return { text: line.text.slice(0, simulateBreak - line.from), from: line.from };
+           }
+           return line;
+       }
+       /**
+       Get the text directly after `pos`, either the entire line
+       or the next 100 characters, whichever is shorter.
+       */
+       textAfterPos(pos, bias = 1) {
+           if (this.options.simulateDoubleBreak && pos == this.options.simulateBreak)
+               return "";
+           let { text, from } = this.lineAt(pos, bias);
+           return text.slice(pos - from, Math.min(text.length, pos + 100 - from));
+       }
+       /**
+       Find the column for the given position.
+       */
+       column(pos, bias = 1) {
+           let { text, from } = this.lineAt(pos, bias);
+           let result = this.countColumn(text, pos - from);
+           let override = this.options.overrideIndentation ? this.options.overrideIndentation(from) : -1;
+           if (override > -1)
+               result += override - this.countColumn(text, text.search(/\S|$/));
+           return result;
+       }
+       /**
+       Find the column position (taking tabs into account) of the given
+       position in the given string.
+       */
+       countColumn(line, pos = line.length) {
+           return countColumn(line, this.state.tabSize, pos);
+       }
+       /**
+       Find the indentation column of the line at the given point.
+       */
+       lineIndent(pos, bias = 1) {
+           let { text, from } = this.lineAt(pos, bias);
+           let override = this.options.overrideIndentation;
+           if (override) {
+               let overriden = override(from);
+               if (overriden > -1)
+                   return overriden;
+           }
+           return this.countColumn(text, text.search(/\S|$/));
+       }
+       /**
+       Returns the [simulated line
+       break](https://codemirror.net/6/docs/ref/#language.IndentContext.constructor^options.simulateBreak)
+       for this context, if any.
+       */
+       get simulatedBreak() {
+           return this.options.simulateBreak || null;
+       }
+   }
+   /**
+   A syntax tree node prop used to associate indentation strategies
+   with node types. Such a strategy is a function from an indentation
+   context to a column number (see also
+   [`indentString`](https://codemirror.net/6/docs/ref/#language.indentString)) or null, where null
+   indicates that no definitive indentation can be determined.
+   */
+   const indentNodeProp = /*@__PURE__*/new NodeProp();
+   // Compute the indentation for a given position from the syntax tree.
+   function syntaxIndentation(cx, ast, pos) {
+       return indentFrom(ast.resolveInner(pos).enterUnfinishedNodesBefore(pos), pos, cx);
+   }
+   function ignoreClosed(cx) {
+       return cx.pos == cx.options.simulateBreak && cx.options.simulateDoubleBreak;
+   }
+   function indentStrategy(tree) {
+       let strategy = tree.type.prop(indentNodeProp);
+       if (strategy)
+           return strategy;
+       let first = tree.firstChild, close;
+       if (first && (close = first.type.prop(NodeProp.closedBy))) {
+           let last = tree.lastChild, closed = last && close.indexOf(last.name) > -1;
+           return cx => delimitedStrategy(cx, true, 1, undefined, closed && !ignoreClosed(cx) ? last.from : undefined);
+       }
+       return tree.parent == null ? topIndent : null;
+   }
+   function indentFrom(node, pos, base) {
+       for (; node; node = node.parent) {
+           let strategy = indentStrategy(node);
+           if (strategy)
+               return strategy(TreeIndentContext.create(base, pos, node));
+       }
+       return null;
+   }
+   function topIndent() { return 0; }
+   /**
+   Objects of this type provide context information and helper
+   methods to indentation functions registered on syntax nodes.
+   */
+   class TreeIndentContext extends IndentContext {
+       constructor(base, 
+       /**
+       The position at which indentation is being computed.
+       */
+       pos, 
+       /**
+       The syntax tree node to which the indentation strategy
+       applies.
+       */
+       node) {
+           super(base.state, base.options);
+           this.base = base;
+           this.pos = pos;
+           this.node = node;
+       }
+       /**
+       @internal
+       */
+       static create(base, pos, node) {
+           return new TreeIndentContext(base, pos, node);
+       }
+       /**
+       Get the text directly after `this.pos`, either the entire line
+       or the next 100 characters, whichever is shorter.
+       */
+       get textAfter() {
+           return this.textAfterPos(this.pos);
+       }
+       /**
+       Get the indentation at the reference line for `this.node`, which
+       is the line on which it starts, unless there is a node that is
+       _not_ a parent of this node covering the start of that line. If
+       so, the line at the start of that node is tried, again skipping
+       on if it is covered by another such node.
+       */
+       get baseIndent() {
+           return this.baseIndentFor(this.node);
+       }
+       /**
+       Get the indentation for the reference line of the given node
+       (see [`baseIndent`](https://codemirror.net/6/docs/ref/#language.TreeIndentContext.baseIndent)).
+       */
+       baseIndentFor(node) {
+           let line = this.state.doc.lineAt(node.from);
+           // Skip line starts that are covered by a sibling (or cousin, etc)
+           for (;;) {
+               let atBreak = node.resolve(line.from);
+               while (atBreak.parent && atBreak.parent.from == atBreak.from)
+                   atBreak = atBreak.parent;
+               if (isParent(atBreak, node))
+                   break;
+               line = this.state.doc.lineAt(atBreak.from);
+           }
+           return this.lineIndent(line.from);
+       }
+       /**
+       Continue looking for indentations in the node's parent nodes,
+       and return the result of that.
+       */
+       continue() {
+           let parent = this.node.parent;
+           return parent ? indentFrom(parent, this.pos, this.base) : 0;
+       }
+   }
+   function isParent(parent, of) {
+       for (let cur = of; cur; cur = cur.parent)
+           if (parent == cur)
+               return true;
+       return false;
+   }
+   // Check whether a delimited node is aligned (meaning there are
+   // non-skipped nodes on the same line as the opening delimiter). And
+   // if so, return the opening token.
+   function bracketedAligned(context) {
+       let tree = context.node;
+       let openToken = tree.childAfter(tree.from), last = tree.lastChild;
+       if (!openToken)
+           return null;
+       let sim = context.options.simulateBreak;
+       let openLine = context.state.doc.lineAt(openToken.from);
+       let lineEnd = sim == null || sim <= openLine.from ? openLine.to : Math.min(openLine.to, sim);
+       for (let pos = openToken.to;;) {
+           let next = tree.childAfter(pos);
+           if (!next || next == last)
+               return null;
+           if (!next.type.isSkipped)
+               return next.from < lineEnd ? openToken : null;
+           pos = next.to;
+       }
+   }
+   function delimitedStrategy(context, align, units, closing, closedAt) {
+       let after = context.textAfter, space = after.match(/^\s*/)[0].length;
+       let closed = closing && after.slice(space, space + closing.length) == closing || closedAt == context.pos + space;
+       let aligned = align ? bracketedAligned(context) : null;
+       if (aligned)
+           return closed ? context.column(aligned.from) : context.column(aligned.to);
+       return context.baseIndent + (closed ? 0 : context.unit * units);
+   }
+
+   /**
+   A facet that registers a code folding service. When called with
+   the extent of a line, such a function should return a foldable
+   range that starts on that line (but continues beyond it), if one
+   can be found.
+   */
+   const foldService = /*@__PURE__*/Facet.define();
+   /**
+   This node prop is used to associate folding information with
+   syntax node types. Given a syntax node, it should check whether
+   that tree is foldable and return the range that can be collapsed
+   when it is.
+   */
+   const foldNodeProp = /*@__PURE__*/new NodeProp();
+   /**
+   [Fold](https://codemirror.net/6/docs/ref/#language.foldNodeProp) function that folds everything but
+   the first and the last child of a syntax node. Useful for nodes
+   that start and end with delimiters.
+   */
+   function foldInside(node) {
+       let first = node.firstChild, last = node.lastChild;
+       return first && first.to < last.from ? { from: first.to, to: last.type.isError ? node.to : last.from } : null;
+   }
+   function syntaxFolding(state, start, end) {
+       let tree = syntaxTree(state);
+       if (tree.length < end)
+           return null;
+       let inner = tree.resolveInner(end, 1);
+       let found = null;
+       for (let cur = inner; cur; cur = cur.parent) {
+           if (cur.to <= end || cur.from > end)
+               continue;
+           if (found && cur.from < start)
+               break;
+           let prop = cur.type.prop(foldNodeProp);
+           if (prop && (cur.to < tree.length - 50 || tree.length == state.doc.length || !isUnfinished(cur))) {
+               let value = prop(cur, state);
+               if (value && value.from <= end && value.from >= start && value.to > end)
+                   found = value;
+           }
+       }
+       return found;
+   }
+   function isUnfinished(node) {
+       let ch = node.lastChild;
+       return ch && ch.to == node.to && ch.type.isError;
+   }
+   /**
+   Check whether the given line is foldable. First asks any fold
+   services registered through
+   [`foldService`](https://codemirror.net/6/docs/ref/#language.foldService), and if none of them return
+   a result, tries to query the [fold node
+   prop](https://codemirror.net/6/docs/ref/#language.foldNodeProp) of syntax nodes that cover the end
+   of the line.
+   */
+   function foldable(state, lineStart, lineEnd) {
+       for (let service of state.facet(foldService)) {
+           let result = service(state, lineStart, lineEnd);
+           if (result)
+               return result;
+       }
+       return syntaxFolding(state, lineStart, lineEnd);
+   }
+   function mapRange(range, mapping) {
+       let from = mapping.mapPos(range.from, 1), to = mapping.mapPos(range.to, -1);
+       return from >= to ? undefined : { from, to };
+   }
+   /**
+   State effect that can be attached to a transaction to fold the
+   given range. (You probably only need this in exceptional
+   circumstances—usually you'll just want to let
+   [`foldCode`](https://codemirror.net/6/docs/ref/#language.foldCode) and the [fold
+   gutter](https://codemirror.net/6/docs/ref/#language.foldGutter) create the transactions.)
+   */
+   const foldEffect = /*@__PURE__*/StateEffect.define({ map: mapRange });
+   /**
+   State effect that unfolds the given range (if it was folded).
+   */
+   const unfoldEffect = /*@__PURE__*/StateEffect.define({ map: mapRange });
+   function selectedLines(view) {
+       let lines = [];
+       for (let { head } of view.state.selection.ranges) {
+           if (lines.some(l => l.from <= head && l.to >= head))
+               continue;
+           lines.push(view.lineBlockAt(head));
+       }
+       return lines;
+   }
+   /**
+   The state field that stores the folded ranges (as a [decoration
+   set](https://codemirror.net/6/docs/ref/#view.DecorationSet)). Can be passed to
+   [`EditorState.toJSON`](https://codemirror.net/6/docs/ref/#state.EditorState.toJSON) and
+   [`fromJSON`](https://codemirror.net/6/docs/ref/#state.EditorState^fromJSON) to serialize the fold
+   state.
+   */
+   const foldState = /*@__PURE__*/StateField.define({
+       create() {
+           return Decoration.none;
+       },
+       update(folded, tr) {
+           folded = folded.map(tr.changes);
+           for (let e of tr.effects) {
+               if (e.is(foldEffect) && !foldExists(folded, e.value.from, e.value.to)) {
+                   let { preparePlaceholder } = tr.state.facet(foldConfig);
+                   let widget = !preparePlaceholder ? foldWidget :
+                       Decoration.replace({ widget: new PreparedFoldWidget(preparePlaceholder(tr.state, e.value)) });
+                   folded = folded.update({ add: [widget.range(e.value.from, e.value.to)] });
+               }
+               else if (e.is(unfoldEffect)) {
+                   folded = folded.update({ filter: (from, to) => e.value.from != from || e.value.to != to,
+                       filterFrom: e.value.from, filterTo: e.value.to });
+               }
+           }
+           // Clear folded ranges that cover the selection head
+           if (tr.selection) {
+               let onSelection = false, { head } = tr.selection.main;
+               folded.between(head, head, (a, b) => { if (a < head && b > head)
+                   onSelection = true; });
+               if (onSelection)
+                   folded = folded.update({
+                       filterFrom: head,
+                       filterTo: head,
+                       filter: (a, b) => b <= head || a >= head
+                   });
+           }
+           return folded;
+       },
+       provide: f => EditorView.decorations.from(f),
+       toJSON(folded, state) {
+           let ranges = [];
+           folded.between(0, state.doc.length, (from, to) => { ranges.push(from, to); });
+           return ranges;
+       },
+       fromJSON(value) {
+           if (!Array.isArray(value) || value.length % 2)
+               throw new RangeError("Invalid JSON for fold state");
+           let ranges = [];
+           for (let i = 0; i < value.length;) {
+               let from = value[i++], to = value[i++];
+               if (typeof from != "number" || typeof to != "number")
+                   throw new RangeError("Invalid JSON for fold state");
+               ranges.push(foldWidget.range(from, to));
+           }
+           return Decoration.set(ranges, true);
+       }
+   });
+   function findFold(state, from, to) {
+       var _a;
+       let found = null;
+       (_a = state.field(foldState, false)) === null || _a === void 0 ? void 0 : _a.between(from, to, (from, to) => {
+           if (!found || found.from > from)
+               found = { from, to };
+       });
+       return found;
+   }
+   function foldExists(folded, from, to) {
+       let found = false;
+       folded.between(from, from, (a, b) => { if (a == from && b == to)
+           found = true; });
+       return found;
+   }
+   function maybeEnable(state, other) {
+       return state.field(foldState, false) ? other : other.concat(StateEffect.appendConfig.of(codeFolding()));
+   }
+   /**
+   Fold the lines that are selected, if possible.
+   */
+   const foldCode = view => {
+       for (let line of selectedLines(view)) {
+           let range = foldable(view.state, line.from, line.to);
+           if (range) {
+               view.dispatch({ effects: maybeEnable(view.state, [foldEffect.of(range), announceFold(view, range)]) });
+               return true;
+           }
+       }
+       return false;
+   };
+   /**
+   Unfold folded ranges on selected lines.
+   */
+   const unfoldCode = view => {
+       if (!view.state.field(foldState, false))
+           return false;
+       let effects = [];
+       for (let line of selectedLines(view)) {
+           let folded = findFold(view.state, line.from, line.to);
+           if (folded)
+               effects.push(unfoldEffect.of(folded), announceFold(view, folded, false));
+       }
+       if (effects.length)
+           view.dispatch({ effects });
+       return effects.length > 0;
+   };
+   function announceFold(view, range, fold = true) {
+       let lineFrom = view.state.doc.lineAt(range.from).number, lineTo = view.state.doc.lineAt(range.to).number;
+       return EditorView.announce.of(`${view.state.phrase(fold ? "Folded lines" : "Unfolded lines")} ${lineFrom} ${view.state.phrase("to")} ${lineTo}.`);
+   }
+   /**
+   Fold all top-level foldable ranges. Note that, in most cases,
+   folding information will depend on the [syntax
+   tree](https://codemirror.net/6/docs/ref/#language.syntaxTree), and folding everything may not work
+   reliably when the document hasn't been fully parsed (either
+   because the editor state was only just initialized, or because the
+   document is so big that the parser decided not to parse it
+   entirely).
+   */
+   const foldAll = view => {
+       let { state } = view, effects = [];
+       for (let pos = 0; pos < state.doc.length;) {
+           let line = view.lineBlockAt(pos), range = foldable(state, line.from, line.to);
+           if (range)
+               effects.push(foldEffect.of(range));
+           pos = (range ? view.lineBlockAt(range.to) : line).to + 1;
+       }
+       if (effects.length)
+           view.dispatch({ effects: maybeEnable(view.state, effects) });
+       return !!effects.length;
+   };
+   /**
+   Unfold all folded code.
+   */
+   const unfoldAll = view => {
+       let field = view.state.field(foldState, false);
+       if (!field || !field.size)
+           return false;
+       let effects = [];
+       field.between(0, view.state.doc.length, (from, to) => { effects.push(unfoldEffect.of({ from, to })); });
+       view.dispatch({ effects });
+       return true;
+   };
+   /**
+   Default fold-related key bindings.
+
+    - Ctrl-Shift-[ (Cmd-Alt-[ on macOS): [`foldCode`](https://codemirror.net/6/docs/ref/#language.foldCode).
+    - Ctrl-Shift-] (Cmd-Alt-] on macOS): [`unfoldCode`](https://codemirror.net/6/docs/ref/#language.unfoldCode).
+    - Ctrl-Alt-[: [`foldAll`](https://codemirror.net/6/docs/ref/#language.foldAll).
+    - Ctrl-Alt-]: [`unfoldAll`](https://codemirror.net/6/docs/ref/#language.unfoldAll).
+   */
+   const foldKeymap = [
+       { key: "Ctrl-Shift-[", mac: "Cmd-Alt-[", run: foldCode },
+       { key: "Ctrl-Shift-]", mac: "Cmd-Alt-]", run: unfoldCode },
+       { key: "Ctrl-Alt-[", run: foldAll },
+       { key: "Ctrl-Alt-]", run: unfoldAll }
+   ];
+   const defaultConfig = {
+       placeholderDOM: null,
+       preparePlaceholder: null,
+       placeholderText: "…"
+   };
+   const foldConfig = /*@__PURE__*/Facet.define({
+       combine(values) { return combineConfig(values, defaultConfig); }
+   });
+   /**
+   Create an extension that configures code folding.
+   */
+   function codeFolding(config) {
+       let result = [foldState, baseTheme$1$1];
+       if (config)
+           result.push(foldConfig.of(config));
+       return result;
+   }
+   function widgetToDOM(view, prepared) {
+       let { state } = view, conf = state.facet(foldConfig);
+       let onclick = (event) => {
+           let line = view.lineBlockAt(view.posAtDOM(event.target));
+           let folded = findFold(view.state, line.from, line.to);
+           if (folded)
+               view.dispatch({ effects: unfoldEffect.of(folded) });
+           event.preventDefault();
+       };
+       if (conf.placeholderDOM)
+           return conf.placeholderDOM(view, onclick, prepared);
+       let element = document.createElement("span");
+       element.textContent = conf.placeholderText;
+       element.setAttribute("aria-label", state.phrase("folded code"));
+       element.title = state.phrase("unfold");
+       element.className = "cm-foldPlaceholder";
+       element.onclick = onclick;
+       return element;
+   }
+   const foldWidget = /*@__PURE__*/Decoration.replace({ widget: /*@__PURE__*/new class extends WidgetType {
+           toDOM(view) { return widgetToDOM(view, null); }
+       } });
+   class PreparedFoldWidget extends WidgetType {
+       constructor(value) {
+           super();
+           this.value = value;
+       }
+       eq(other) { return this.value == other.value; }
+       toDOM(view) { return widgetToDOM(view, this.value); }
+   }
+   const foldGutterDefaults = {
+       openText: "⌄",
+       closedText: "›",
+       markerDOM: null,
+       domEventHandlers: {},
+       foldingChanged: () => false
+   };
+   class FoldMarker extends GutterMarker {
+       constructor(config, open) {
+           super();
+           this.config = config;
+           this.open = open;
+       }
+       eq(other) { return this.config == other.config && this.open == other.open; }
+       toDOM(view) {
+           if (this.config.markerDOM)
+               return this.config.markerDOM(this.open);
+           let span = document.createElement("span");
+           span.textContent = this.open ? this.config.openText : this.config.closedText;
+           span.title = view.state.phrase(this.open ? "Fold line" : "Unfold line");
+           return span;
+       }
+   }
+   /**
+   Create an extension that registers a fold gutter, which shows a
+   fold status indicator before foldable lines (which can be clicked
+   to fold or unfold the line).
+   */
+   function foldGutter(config = {}) {
+       let fullConfig = Object.assign(Object.assign({}, foldGutterDefaults), config);
+       let canFold = new FoldMarker(fullConfig, true), canUnfold = new FoldMarker(fullConfig, false);
+       let markers = ViewPlugin.fromClass(class {
+           constructor(view) {
+               this.from = view.viewport.from;
+               this.markers = this.buildMarkers(view);
+           }
+           update(update) {
+               if (update.docChanged || update.viewportChanged ||
+                   update.startState.facet(language) != update.state.facet(language) ||
+                   update.startState.field(foldState, false) != update.state.field(foldState, false) ||
+                   syntaxTree(update.startState) != syntaxTree(update.state) ||
+                   fullConfig.foldingChanged(update))
+                   this.markers = this.buildMarkers(update.view);
+           }
+           buildMarkers(view) {
+               let builder = new RangeSetBuilder();
+               for (let line of view.viewportLineBlocks) {
+                   let mark = findFold(view.state, line.from, line.to) ? canUnfold
+                       : foldable(view.state, line.from, line.to) ? canFold : null;
+                   if (mark)
+                       builder.add(line.from, line.from, mark);
+               }
+               return builder.finish();
+           }
+       });
+       let { domEventHandlers } = fullConfig;
+       return [
+           markers,
+           gutter({
+               class: "cm-foldGutter",
+               markers(view) { var _a; return ((_a = view.plugin(markers)) === null || _a === void 0 ? void 0 : _a.markers) || RangeSet.empty; },
+               initialSpacer() {
+                   return new FoldMarker(fullConfig, false);
+               },
+               domEventHandlers: Object.assign(Object.assign({}, domEventHandlers), { click: (view, line, event) => {
+                       if (domEventHandlers.click && domEventHandlers.click(view, line, event))
+                           return true;
+                       let folded = findFold(view.state, line.from, line.to);
+                       if (folded) {
+                           view.dispatch({ effects: unfoldEffect.of(folded) });
+                           return true;
+                       }
+                       let range = foldable(view.state, line.from, line.to);
+                       if (range) {
+                           view.dispatch({ effects: foldEffect.of(range) });
+                           return true;
+                       }
+                       return false;
+                   } })
+           }),
+           codeFolding()
+       ];
+   }
+   const baseTheme$1$1 = /*@__PURE__*/EditorView.baseTheme({
+       ".cm-foldPlaceholder": {
+           backgroundColor: "#eee",
+           border: "1px solid #ddd",
+           color: "#888",
+           borderRadius: ".2em",
+           margin: "0 1px",
+           padding: "0 1px",
+           cursor: "pointer"
+       },
+       ".cm-foldGutter span": {
+           padding: "0 1px",
+           cursor: "pointer"
+       }
+   });
+
+   /**
    A highlight style associates CSS styles with higlighting
    [tags](https://lezer.codemirror.net/docs/ref#highlight.Tag).
    */
@@ -17603,6 +18300,109 @@
        { tag: tags.invalid,
            color: "#f00" }
    ]);
+   const DefaultScanDist = 10000, DefaultBrackets = "()[]{}";
+   /**
+   When larger syntax nodes, such as HTML tags, are marked as
+   opening/closing, it can be a bit messy to treat the whole node as
+   a matchable bracket. This node prop allows you to define, for such
+   a node, a ‘handle’—the part of the node that is highlighted, and
+   that the cursor must be on to activate highlighting in the first
+   place.
+   */
+   const bracketMatchingHandle = /*@__PURE__*/new NodeProp();
+   function matchingNodes(node, dir, brackets) {
+       let byProp = node.prop(dir < 0 ? NodeProp.openedBy : NodeProp.closedBy);
+       if (byProp)
+           return byProp;
+       if (node.name.length == 1) {
+           let index = brackets.indexOf(node.name);
+           if (index > -1 && index % 2 == (dir < 0 ? 1 : 0))
+               return [brackets[index + dir]];
+       }
+       return null;
+   }
+   function findHandle(node) {
+       let hasHandle = node.type.prop(bracketMatchingHandle);
+       return hasHandle ? hasHandle(node.node) : node;
+   }
+   /**
+   Find the matching bracket for the token at `pos`, scanning
+   direction `dir`. Only the `brackets` and `maxScanDistance`
+   properties are used from `config`, if given. Returns null if no
+   bracket was found at `pos`, or a match result otherwise.
+   */
+   function matchBrackets(state, pos, dir, config = {}) {
+       let maxScanDistance = config.maxScanDistance || DefaultScanDist, brackets = config.brackets || DefaultBrackets;
+       let tree = syntaxTree(state), node = tree.resolveInner(pos, dir);
+       for (let cur = node; cur; cur = cur.parent) {
+           let matches = matchingNodes(cur.type, dir, brackets);
+           if (matches && cur.from < cur.to) {
+               let handle = findHandle(cur);
+               if (handle && (dir > 0 ? pos >= handle.from && pos < handle.to : pos > handle.from && pos <= handle.to))
+                   return matchMarkedBrackets(state, pos, dir, cur, handle, matches, brackets);
+           }
+       }
+       return matchPlainBrackets(state, pos, dir, tree, node.type, maxScanDistance, brackets);
+   }
+   function matchMarkedBrackets(_state, _pos, dir, token, handle, matching, brackets) {
+       let parent = token.parent, firstToken = { from: handle.from, to: handle.to };
+       let depth = 0, cursor = parent === null || parent === void 0 ? void 0 : parent.cursor();
+       if (cursor && (dir < 0 ? cursor.childBefore(token.from) : cursor.childAfter(token.to)))
+           do {
+               if (dir < 0 ? cursor.to <= token.from : cursor.from >= token.to) {
+                   if (depth == 0 && matching.indexOf(cursor.type.name) > -1 && cursor.from < cursor.to) {
+                       let endHandle = findHandle(cursor);
+                       return { start: firstToken, end: endHandle ? { from: endHandle.from, to: endHandle.to } : undefined, matched: true };
+                   }
+                   else if (matchingNodes(cursor.type, dir, brackets)) {
+                       depth++;
+                   }
+                   else if (matchingNodes(cursor.type, -dir, brackets)) {
+                       if (depth == 0) {
+                           let endHandle = findHandle(cursor);
+                           return {
+                               start: firstToken,
+                               end: endHandle && endHandle.from < endHandle.to ? { from: endHandle.from, to: endHandle.to } : undefined,
+                               matched: false
+                           };
+                       }
+                       depth--;
+                   }
+               }
+           } while (dir < 0 ? cursor.prevSibling() : cursor.nextSibling());
+       return { start: firstToken, matched: false };
+   }
+   function matchPlainBrackets(state, pos, dir, tree, tokenType, maxScanDistance, brackets) {
+       let startCh = dir < 0 ? state.sliceDoc(pos - 1, pos) : state.sliceDoc(pos, pos + 1);
+       let bracket = brackets.indexOf(startCh);
+       if (bracket < 0 || (bracket % 2 == 0) != (dir > 0))
+           return null;
+       let startToken = { from: dir < 0 ? pos - 1 : pos, to: dir > 0 ? pos + 1 : pos };
+       let iter = state.doc.iterRange(pos, dir > 0 ? state.doc.length : 0), depth = 0;
+       for (let distance = 0; !(iter.next()).done && distance <= maxScanDistance;) {
+           let text = iter.value;
+           if (dir < 0)
+               distance += text.length;
+           let basePos = pos + distance * dir;
+           for (let pos = dir > 0 ? 0 : text.length - 1, end = dir > 0 ? text.length : -1; pos != end; pos += dir) {
+               let found = brackets.indexOf(text[pos]);
+               if (found < 0 || tree.resolveInner(basePos + pos, 1).type != tokenType)
+                   continue;
+               if ((found % 2 == 0) == (dir > 0)) {
+                   depth++;
+               }
+               else if (depth == 1) { // Closing
+                   return { start: startToken, end: { from: basePos + pos, to: basePos + pos + 1 }, matched: (found >> 1) == (bracket >> 1) };
+               }
+               else {
+                   depth--;
+               }
+           }
+           if (dir > 0)
+               distance += text.length;
+       }
+       return iter.done ? { start: startToken, matched: false } : null;
+   }
    const noTokens = /*@__PURE__*/Object.create(null);
    const typeArray = [NodeType.none];
    const warned = [];
@@ -17657,6 +18457,171 @@
        });
        typeArray.push(type);
        return type.id;
+   }
+
+   /**
+   Comment or uncomment the current selection. Will use line comments
+   if available, otherwise falling back to block comments.
+   */
+   const toggleComment = target => {
+       let { state } = target, line = state.doc.lineAt(state.selection.main.from), config = getConfig(target.state, line.from);
+       return config.line ? toggleLineComment(target) : config.block ? toggleBlockCommentByLine(target) : false;
+   };
+   function command(f, option) {
+       return ({ state, dispatch }) => {
+           if (state.readOnly)
+               return false;
+           let tr = f(option, state);
+           if (!tr)
+               return false;
+           dispatch(state.update(tr));
+           return true;
+       };
+   }
+   /**
+   Comment or uncomment the current selection using line comments.
+   The line comment syntax is taken from the
+   [`commentTokens`](https://codemirror.net/6/docs/ref/#commands.CommentTokens) [language
+   data](https://codemirror.net/6/docs/ref/#state.EditorState.languageDataAt).
+   */
+   const toggleLineComment = /*@__PURE__*/command(changeLineComment, 0 /* CommentOption.Toggle */);
+   /**
+   Comment or uncomment the current selection using block comments.
+   The block comment syntax is taken from the
+   [`commentTokens`](https://codemirror.net/6/docs/ref/#commands.CommentTokens) [language
+   data](https://codemirror.net/6/docs/ref/#state.EditorState.languageDataAt).
+   */
+   const toggleBlockComment = /*@__PURE__*/command(changeBlockComment, 0 /* CommentOption.Toggle */);
+   /**
+   Comment or uncomment the lines around the current selection using
+   block comments.
+   */
+   const toggleBlockCommentByLine = /*@__PURE__*/command((o, s) => changeBlockComment(o, s, selectedLineRanges(s)), 0 /* CommentOption.Toggle */);
+   function getConfig(state, pos) {
+       let data = state.languageDataAt("commentTokens", pos);
+       return data.length ? data[0] : {};
+   }
+   const SearchMargin = 50;
+   /**
+   Determines if the given range is block-commented in the given
+   state.
+   */
+   function findBlockComment(state, { open, close }, from, to) {
+       let textBefore = state.sliceDoc(from - SearchMargin, from);
+       let textAfter = state.sliceDoc(to, to + SearchMargin);
+       let spaceBefore = /\s*$/.exec(textBefore)[0].length, spaceAfter = /^\s*/.exec(textAfter)[0].length;
+       let beforeOff = textBefore.length - spaceBefore;
+       if (textBefore.slice(beforeOff - open.length, beforeOff) == open &&
+           textAfter.slice(spaceAfter, spaceAfter + close.length) == close) {
+           return { open: { pos: from - spaceBefore, margin: spaceBefore && 1 },
+               close: { pos: to + spaceAfter, margin: spaceAfter && 1 } };
+       }
+       let startText, endText;
+       if (to - from <= 2 * SearchMargin) {
+           startText = endText = state.sliceDoc(from, to);
+       }
+       else {
+           startText = state.sliceDoc(from, from + SearchMargin);
+           endText = state.sliceDoc(to - SearchMargin, to);
+       }
+       let startSpace = /^\s*/.exec(startText)[0].length, endSpace = /\s*$/.exec(endText)[0].length;
+       let endOff = endText.length - endSpace - close.length;
+       if (startText.slice(startSpace, startSpace + open.length) == open &&
+           endText.slice(endOff, endOff + close.length) == close) {
+           return { open: { pos: from + startSpace + open.length,
+                   margin: /\s/.test(startText.charAt(startSpace + open.length)) ? 1 : 0 },
+               close: { pos: to - endSpace - close.length,
+                   margin: /\s/.test(endText.charAt(endOff - 1)) ? 1 : 0 } };
+       }
+       return null;
+   }
+   function selectedLineRanges(state) {
+       let ranges = [];
+       for (let r of state.selection.ranges) {
+           let fromLine = state.doc.lineAt(r.from);
+           let toLine = r.to <= fromLine.to ? fromLine : state.doc.lineAt(r.to);
+           let last = ranges.length - 1;
+           if (last >= 0 && ranges[last].to > fromLine.from)
+               ranges[last].to = toLine.to;
+           else
+               ranges.push({ from: fromLine.from + /^\s*/.exec(fromLine.text)[0].length, to: toLine.to });
+       }
+       return ranges;
+   }
+   // Performs toggle, comment and uncomment of block comments in
+   // languages that support them.
+   function changeBlockComment(option, state, ranges = state.selection.ranges) {
+       let tokens = ranges.map(r => getConfig(state, r.from).block);
+       if (!tokens.every(c => c))
+           return null;
+       let comments = ranges.map((r, i) => findBlockComment(state, tokens[i], r.from, r.to));
+       if (option != 2 /* CommentOption.Uncomment */ && !comments.every(c => c)) {
+           return { changes: state.changes(ranges.map((range, i) => {
+                   if (comments[i])
+                       return [];
+                   return [{ from: range.from, insert: tokens[i].open + " " }, { from: range.to, insert: " " + tokens[i].close }];
+               })) };
+       }
+       else if (option != 1 /* CommentOption.Comment */ && comments.some(c => c)) {
+           let changes = [];
+           for (let i = 0, comment; i < comments.length; i++)
+               if (comment = comments[i]) {
+                   let token = tokens[i], { open, close } = comment;
+                   changes.push({ from: open.pos - token.open.length, to: open.pos + open.margin }, { from: close.pos - close.margin, to: close.pos + token.close.length });
+               }
+           return { changes };
+       }
+       return null;
+   }
+   // Performs toggle, comment and uncomment of line comments.
+   function changeLineComment(option, state, ranges = state.selection.ranges) {
+       let lines = [];
+       let prevLine = -1;
+       for (let { from, to } of ranges) {
+           let startI = lines.length, minIndent = 1e9;
+           let token = getConfig(state, from).line;
+           if (!token)
+               continue;
+           for (let pos = from; pos <= to;) {
+               let line = state.doc.lineAt(pos);
+               if (line.from > prevLine && (from == to || to > line.from)) {
+                   prevLine = line.from;
+                   let indent = /^\s*/.exec(line.text)[0].length;
+                   let empty = indent == line.length;
+                   let comment = line.text.slice(indent, indent + token.length) == token ? indent : -1;
+                   if (indent < line.text.length && indent < minIndent)
+                       minIndent = indent;
+                   lines.push({ line, comment, token, indent, empty, single: false });
+               }
+               pos = line.to + 1;
+           }
+           if (minIndent < 1e9)
+               for (let i = startI; i < lines.length; i++)
+                   if (lines[i].indent < lines[i].line.text.length)
+                       lines[i].indent = minIndent;
+           if (lines.length == startI + 1)
+               lines[startI].single = true;
+       }
+       if (option != 2 /* CommentOption.Uncomment */ && lines.some(l => l.comment < 0 && (!l.empty || l.single))) {
+           let changes = [];
+           for (let { line, token, indent, empty, single } of lines)
+               if (single || !empty)
+                   changes.push({ from: line.from + indent, insert: token + " " });
+           let changeSet = state.changes(changes);
+           return { changes: changeSet, selection: state.selection.map(changeSet, 1) };
+       }
+       else if (option != 1 /* CommentOption.Comment */ && lines.some(l => l.comment >= 0)) {
+           let changes = [];
+           for (let { line, comment, token } of lines)
+               if (comment >= 0) {
+                   let from = line.from + comment, to = from + token.length;
+                   if (line.text[to - line.from] == " ")
+                       to++;
+                   changes.push({ from, to });
+               }
+           return { changes };
+       }
+       return null;
    }
 
    const fromHistory = /*@__PURE__*/Annotation.define();
@@ -17984,6 +18949,897 @@
        }
    }
    HistoryState.empty = /*@__PURE__*/new HistoryState(none$1, none$1);
+
+   function updateSel(sel, by) {
+       return EditorSelection.create(sel.ranges.map(by), sel.mainIndex);
+   }
+   function setSel(state, selection) {
+       return state.update({ selection, scrollIntoView: true, userEvent: "select" });
+   }
+   function moveSel({ state, dispatch }, how) {
+       let selection = updateSel(state.selection, how);
+       if (selection.eq(state.selection))
+           return false;
+       dispatch(setSel(state, selection));
+       return true;
+   }
+   function rangeEnd(range, forward) {
+       return EditorSelection.cursor(forward ? range.to : range.from);
+   }
+   function cursorByChar(view, forward) {
+       return moveSel(view, range => range.empty ? view.moveByChar(range, forward) : rangeEnd(range, forward));
+   }
+   function ltrAtCursor(view) {
+       return view.textDirectionAt(view.state.selection.main.head) == Direction.LTR;
+   }
+   /**
+   Move the selection one character to the left (which is backward in
+   left-to-right text, forward in right-to-left text).
+   */
+   const cursorCharLeft = view => cursorByChar(view, !ltrAtCursor(view));
+   /**
+   Move the selection one character to the right.
+   */
+   const cursorCharRight = view => cursorByChar(view, ltrAtCursor(view));
+   function cursorByGroup(view, forward) {
+       return moveSel(view, range => range.empty ? view.moveByGroup(range, forward) : rangeEnd(range, forward));
+   }
+   /**
+   Move the selection to the left across one group of word or
+   non-word (but also non-space) characters.
+   */
+   const cursorGroupLeft = view => cursorByGroup(view, !ltrAtCursor(view));
+   /**
+   Move the selection one group to the right.
+   */
+   const cursorGroupRight = view => cursorByGroup(view, ltrAtCursor(view));
+   function interestingNode(state, node, bracketProp) {
+       if (node.type.prop(bracketProp))
+           return true;
+       let len = node.to - node.from;
+       return len && (len > 2 || /[^\s,.;:]/.test(state.sliceDoc(node.from, node.to))) || node.firstChild;
+   }
+   function moveBySyntax(state, start, forward) {
+       let pos = syntaxTree(state).resolveInner(start.head);
+       let bracketProp = forward ? NodeProp.closedBy : NodeProp.openedBy;
+       // Scan forward through child nodes to see if there's an interesting
+       // node ahead.
+       for (let at = start.head;;) {
+           let next = forward ? pos.childAfter(at) : pos.childBefore(at);
+           if (!next)
+               break;
+           if (interestingNode(state, next, bracketProp))
+               pos = next;
+           else
+               at = forward ? next.to : next.from;
+       }
+       let bracket = pos.type.prop(bracketProp), match, newPos;
+       if (bracket && (match = forward ? matchBrackets(state, pos.from, 1) : matchBrackets(state, pos.to, -1)) && match.matched)
+           newPos = forward ? match.end.to : match.end.from;
+       else
+           newPos = forward ? pos.to : pos.from;
+       return EditorSelection.cursor(newPos, forward ? -1 : 1);
+   }
+   /**
+   Move the cursor over the next syntactic element to the left.
+   */
+   const cursorSyntaxLeft = view => moveSel(view, range => moveBySyntax(view.state, range, !ltrAtCursor(view)));
+   /**
+   Move the cursor over the next syntactic element to the right.
+   */
+   const cursorSyntaxRight = view => moveSel(view, range => moveBySyntax(view.state, range, ltrAtCursor(view)));
+   function cursorByLine(view, forward) {
+       return moveSel(view, range => {
+           if (!range.empty)
+               return rangeEnd(range, forward);
+           let moved = view.moveVertically(range, forward);
+           return moved.head != range.head ? moved : view.moveToLineBoundary(range, forward);
+       });
+   }
+   /**
+   Move the selection one line up.
+   */
+   const cursorLineUp = view => cursorByLine(view, false);
+   /**
+   Move the selection one line down.
+   */
+   const cursorLineDown = view => cursorByLine(view, true);
+   function pageInfo(view) {
+       let selfScroll = view.scrollDOM.clientHeight < view.scrollDOM.scrollHeight - 2;
+       let marginTop = 0, marginBottom = 0, height;
+       if (selfScroll) {
+           for (let source of view.state.facet(EditorView.scrollMargins)) {
+               let margins = source(view);
+               if (margins === null || margins === void 0 ? void 0 : margins.top)
+                   marginTop = Math.max(margins === null || margins === void 0 ? void 0 : margins.top, marginTop);
+               if (margins === null || margins === void 0 ? void 0 : margins.bottom)
+                   marginBottom = Math.max(margins === null || margins === void 0 ? void 0 : margins.bottom, marginBottom);
+           }
+           height = view.scrollDOM.clientHeight - marginTop - marginBottom;
+       }
+       else {
+           height = (view.dom.ownerDocument.defaultView || window).innerHeight;
+       }
+       return { marginTop, marginBottom, selfScroll,
+           height: Math.max(view.defaultLineHeight, height - 5) };
+   }
+   function cursorByPage(view, forward) {
+       let page = pageInfo(view);
+       let { state } = view, selection = updateSel(state.selection, range => {
+           return range.empty ? view.moveVertically(range, forward, page.height)
+               : rangeEnd(range, forward);
+       });
+       if (selection.eq(state.selection))
+           return false;
+       let effect;
+       if (page.selfScroll) {
+           let startPos = view.coordsAtPos(state.selection.main.head);
+           let scrollRect = view.scrollDOM.getBoundingClientRect();
+           let scrollTop = scrollRect.top + page.marginTop, scrollBottom = scrollRect.bottom - page.marginBottom;
+           if (startPos && startPos.top > scrollTop && startPos.bottom < scrollBottom)
+               effect = EditorView.scrollIntoView(selection.main.head, { y: "start", yMargin: startPos.top - scrollTop });
+       }
+       view.dispatch(setSel(state, selection), { effects: effect });
+       return true;
+   }
+   /**
+   Move the selection one page up.
+   */
+   const cursorPageUp = view => cursorByPage(view, false);
+   /**
+   Move the selection one page down.
+   */
+   const cursorPageDown = view => cursorByPage(view, true);
+   function moveByLineBoundary(view, start, forward) {
+       let line = view.lineBlockAt(start.head), moved = view.moveToLineBoundary(start, forward);
+       if (moved.head == start.head && moved.head != (forward ? line.to : line.from))
+           moved = view.moveToLineBoundary(start, forward, false);
+       if (!forward && moved.head == line.from && line.length) {
+           let space = /^\s*/.exec(view.state.sliceDoc(line.from, Math.min(line.from + 100, line.to)))[0].length;
+           if (space && start.head != line.from + space)
+               moved = EditorSelection.cursor(line.from + space);
+       }
+       return moved;
+   }
+   /**
+   Move the selection to the next line wrap point, or to the end of
+   the line if there isn't one left on this line.
+   */
+   const cursorLineBoundaryForward = view => moveSel(view, range => moveByLineBoundary(view, range, true));
+   /**
+   Move the selection to previous line wrap point, or failing that to
+   the start of the line. If the line is indented, and the cursor
+   isn't already at the end of the indentation, this will move to the
+   end of the indentation instead of the start of the line.
+   */
+   const cursorLineBoundaryBackward = view => moveSel(view, range => moveByLineBoundary(view, range, false));
+   /**
+   Move the selection one line wrap point to the left.
+   */
+   const cursorLineBoundaryLeft = view => moveSel(view, range => moveByLineBoundary(view, range, !ltrAtCursor(view)));
+   /**
+   Move the selection one line wrap point to the right.
+   */
+   const cursorLineBoundaryRight = view => moveSel(view, range => moveByLineBoundary(view, range, ltrAtCursor(view)));
+   /**
+   Move the selection to the start of the line.
+   */
+   const cursorLineStart = view => moveSel(view, range => EditorSelection.cursor(view.lineBlockAt(range.head).from, 1));
+   /**
+   Move the selection to the end of the line.
+   */
+   const cursorLineEnd = view => moveSel(view, range => EditorSelection.cursor(view.lineBlockAt(range.head).to, -1));
+   function toMatchingBracket(state, dispatch, extend) {
+       let found = false, selection = updateSel(state.selection, range => {
+           let matching = matchBrackets(state, range.head, -1)
+               || matchBrackets(state, range.head, 1)
+               || (range.head > 0 && matchBrackets(state, range.head - 1, 1))
+               || (range.head < state.doc.length && matchBrackets(state, range.head + 1, -1));
+           if (!matching || !matching.end)
+               return range;
+           found = true;
+           let head = matching.start.from == range.head ? matching.end.to : matching.end.from;
+           return extend ? EditorSelection.range(range.anchor, head) : EditorSelection.cursor(head);
+       });
+       if (!found)
+           return false;
+       dispatch(setSel(state, selection));
+       return true;
+   }
+   /**
+   Move the selection to the bracket matching the one it is currently
+   on, if any.
+   */
+   const cursorMatchingBracket = ({ state, dispatch }) => toMatchingBracket(state, dispatch, false);
+   function extendSel(view, how) {
+       let selection = updateSel(view.state.selection, range => {
+           let head = how(range);
+           return EditorSelection.range(range.anchor, head.head, head.goalColumn, head.bidiLevel || undefined);
+       });
+       if (selection.eq(view.state.selection))
+           return false;
+       view.dispatch(setSel(view.state, selection));
+       return true;
+   }
+   function selectByChar(view, forward) {
+       return extendSel(view, range => view.moveByChar(range, forward));
+   }
+   /**
+   Move the selection head one character to the left, while leaving
+   the anchor in place.
+   */
+   const selectCharLeft = view => selectByChar(view, !ltrAtCursor(view));
+   /**
+   Move the selection head one character to the right.
+   */
+   const selectCharRight = view => selectByChar(view, ltrAtCursor(view));
+   function selectByGroup(view, forward) {
+       return extendSel(view, range => view.moveByGroup(range, forward));
+   }
+   /**
+   Move the selection head one [group](https://codemirror.net/6/docs/ref/#commands.cursorGroupLeft) to
+   the left.
+   */
+   const selectGroupLeft = view => selectByGroup(view, !ltrAtCursor(view));
+   /**
+   Move the selection head one group to the right.
+   */
+   const selectGroupRight = view => selectByGroup(view, ltrAtCursor(view));
+   /**
+   Move the selection head over the next syntactic element to the left.
+   */
+   const selectSyntaxLeft = view => extendSel(view, range => moveBySyntax(view.state, range, !ltrAtCursor(view)));
+   /**
+   Move the selection head over the next syntactic element to the right.
+   */
+   const selectSyntaxRight = view => extendSel(view, range => moveBySyntax(view.state, range, ltrAtCursor(view)));
+   function selectByLine(view, forward) {
+       return extendSel(view, range => view.moveVertically(range, forward));
+   }
+   /**
+   Move the selection head one line up.
+   */
+   const selectLineUp = view => selectByLine(view, false);
+   /**
+   Move the selection head one line down.
+   */
+   const selectLineDown = view => selectByLine(view, true);
+   function selectByPage(view, forward) {
+       return extendSel(view, range => view.moveVertically(range, forward, pageInfo(view).height));
+   }
+   /**
+   Move the selection head one page up.
+   */
+   const selectPageUp = view => selectByPage(view, false);
+   /**
+   Move the selection head one page down.
+   */
+   const selectPageDown = view => selectByPage(view, true);
+   /**
+   Move the selection head to the next line boundary.
+   */
+   const selectLineBoundaryForward = view => extendSel(view, range => moveByLineBoundary(view, range, true));
+   /**
+   Move the selection head to the previous line boundary.
+   */
+   const selectLineBoundaryBackward = view => extendSel(view, range => moveByLineBoundary(view, range, false));
+   /**
+   Move the selection head one line boundary to the left.
+   */
+   const selectLineBoundaryLeft = view => extendSel(view, range => moveByLineBoundary(view, range, !ltrAtCursor(view)));
+   /**
+   Move the selection head one line boundary to the right.
+   */
+   const selectLineBoundaryRight = view => extendSel(view, range => moveByLineBoundary(view, range, ltrAtCursor(view)));
+   /**
+   Move the selection head to the start of the line.
+   */
+   const selectLineStart = view => extendSel(view, range => EditorSelection.cursor(view.lineBlockAt(range.head).from));
+   /**
+   Move the selection head to the end of the line.
+   */
+   const selectLineEnd = view => extendSel(view, range => EditorSelection.cursor(view.lineBlockAt(range.head).to));
+   /**
+   Move the selection to the start of the document.
+   */
+   const cursorDocStart = ({ state, dispatch }) => {
+       dispatch(setSel(state, { anchor: 0 }));
+       return true;
+   };
+   /**
+   Move the selection to the end of the document.
+   */
+   const cursorDocEnd = ({ state, dispatch }) => {
+       dispatch(setSel(state, { anchor: state.doc.length }));
+       return true;
+   };
+   /**
+   Move the selection head to the start of the document.
+   */
+   const selectDocStart = ({ state, dispatch }) => {
+       dispatch(setSel(state, { anchor: state.selection.main.anchor, head: 0 }));
+       return true;
+   };
+   /**
+   Move the selection head to the end of the document.
+   */
+   const selectDocEnd = ({ state, dispatch }) => {
+       dispatch(setSel(state, { anchor: state.selection.main.anchor, head: state.doc.length }));
+       return true;
+   };
+   /**
+   Select the entire document.
+   */
+   const selectAll = ({ state, dispatch }) => {
+       dispatch(state.update({ selection: { anchor: 0, head: state.doc.length }, userEvent: "select" }));
+       return true;
+   };
+   /**
+   Expand the selection to cover entire lines.
+   */
+   const selectLine = ({ state, dispatch }) => {
+       let ranges = selectedLineBlocks(state).map(({ from, to }) => EditorSelection.range(from, Math.min(to + 1, state.doc.length)));
+       dispatch(state.update({ selection: EditorSelection.create(ranges), userEvent: "select" }));
+       return true;
+   };
+   /**
+   Select the next syntactic construct that is larger than the
+   selection. Note that this will only work insofar as the language
+   [provider](https://codemirror.net/6/docs/ref/#language.language) you use builds up a full
+   syntax tree.
+   */
+   const selectParentSyntax = ({ state, dispatch }) => {
+       let selection = updateSel(state.selection, range => {
+           var _a;
+           let stack = syntaxTree(state).resolveStack(range.from, 1);
+           for (let cur = stack; cur; cur = cur.next) {
+               let { node } = cur;
+               if (((node.from < range.from && node.to >= range.to) ||
+                   (node.to > range.to && node.from <= range.from)) &&
+                   ((_a = node.parent) === null || _a === void 0 ? void 0 : _a.parent))
+                   return EditorSelection.range(node.to, node.from);
+           }
+           return range;
+       });
+       dispatch(setSel(state, selection));
+       return true;
+   };
+   /**
+   Simplify the current selection. When multiple ranges are selected,
+   reduce it to its main range. Otherwise, if the selection is
+   non-empty, convert it to a cursor selection.
+   */
+   const simplifySelection = ({ state, dispatch }) => {
+       let cur = state.selection, selection = null;
+       if (cur.ranges.length > 1)
+           selection = EditorSelection.create([cur.main]);
+       else if (!cur.main.empty)
+           selection = EditorSelection.create([EditorSelection.cursor(cur.main.head)]);
+       if (!selection)
+           return false;
+       dispatch(setSel(state, selection));
+       return true;
+   };
+   function deleteBy(target, by) {
+       if (target.state.readOnly)
+           return false;
+       let event = "delete.selection", { state } = target;
+       let changes = state.changeByRange(range => {
+           let { from, to } = range;
+           if (from == to) {
+               let towards = by(range);
+               if (towards < from) {
+                   event = "delete.backward";
+                   towards = skipAtomic(target, towards, false);
+               }
+               else if (towards > from) {
+                   event = "delete.forward";
+                   towards = skipAtomic(target, towards, true);
+               }
+               from = Math.min(from, towards);
+               to = Math.max(to, towards);
+           }
+           else {
+               from = skipAtomic(target, from, false);
+               to = skipAtomic(target, to, true);
+           }
+           return from == to ? { range } : { changes: { from, to }, range: EditorSelection.cursor(from, from < range.head ? -1 : 1) };
+       });
+       if (changes.changes.empty)
+           return false;
+       target.dispatch(state.update(changes, {
+           scrollIntoView: true,
+           userEvent: event,
+           effects: event == "delete.selection" ? EditorView.announce.of(state.phrase("Selection deleted")) : undefined
+       }));
+       return true;
+   }
+   function skipAtomic(target, pos, forward) {
+       if (target instanceof EditorView)
+           for (let ranges of target.state.facet(EditorView.atomicRanges).map(f => f(target)))
+               ranges.between(pos, pos, (from, to) => {
+                   if (from < pos && to > pos)
+                       pos = forward ? to : from;
+               });
+       return pos;
+   }
+   const deleteByChar = (target, forward) => deleteBy(target, range => {
+       let pos = range.from, { state } = target, line = state.doc.lineAt(pos), before, targetPos;
+       if (!forward && pos > line.from && pos < line.from + 200 &&
+           !/[^ \t]/.test(before = line.text.slice(0, pos - line.from))) {
+           if (before[before.length - 1] == "\t")
+               return pos - 1;
+           let col = countColumn(before, state.tabSize), drop = col % getIndentUnit(state) || getIndentUnit(state);
+           for (let i = 0; i < drop && before[before.length - 1 - i] == " "; i++)
+               pos--;
+           targetPos = pos;
+       }
+       else {
+           targetPos = findClusterBreak(line.text, pos - line.from, forward, forward) + line.from;
+           if (targetPos == pos && line.number != (forward ? state.doc.lines : 1))
+               targetPos += forward ? 1 : -1;
+       }
+       return targetPos;
+   });
+   /**
+   Delete the selection, or, for cursor selections, the character
+   before the cursor.
+   */
+   const deleteCharBackward = view => deleteByChar(view, false);
+   /**
+   Delete the selection or the character after the cursor.
+   */
+   const deleteCharForward = view => deleteByChar(view, true);
+   const deleteByGroup = (target, forward) => deleteBy(target, range => {
+       let pos = range.head, { state } = target, line = state.doc.lineAt(pos);
+       let categorize = state.charCategorizer(pos);
+       for (let cat = null;;) {
+           if (pos == (forward ? line.to : line.from)) {
+               if (pos == range.head && line.number != (forward ? state.doc.lines : 1))
+                   pos += forward ? 1 : -1;
+               break;
+           }
+           let next = findClusterBreak(line.text, pos - line.from, forward) + line.from;
+           let nextChar = line.text.slice(Math.min(pos, next) - line.from, Math.max(pos, next) - line.from);
+           let nextCat = categorize(nextChar);
+           if (cat != null && nextCat != cat)
+               break;
+           if (nextChar != " " || pos != range.head)
+               cat = nextCat;
+           pos = next;
+       }
+       return pos;
+   });
+   /**
+   Delete the selection or backward until the end of the next
+   [group](https://codemirror.net/6/docs/ref/#view.EditorView.moveByGroup), only skipping groups of
+   whitespace when they consist of a single space.
+   */
+   const deleteGroupBackward = target => deleteByGroup(target, false);
+   /**
+   Delete the selection or forward until the end of the next group.
+   */
+   const deleteGroupForward = target => deleteByGroup(target, true);
+   /**
+   Delete the selection, or, if it is a cursor selection, delete to
+   the end of the line. If the cursor is directly at the end of the
+   line, delete the line break after it.
+   */
+   const deleteToLineEnd = view => deleteBy(view, range => {
+       let lineEnd = view.lineBlockAt(range.head).to;
+       return range.head < lineEnd ? lineEnd : Math.min(view.state.doc.length, range.head + 1);
+   });
+   /**
+   Delete the selection, or, if it is a cursor selection, delete to
+   the start of the line or the next line wrap before the cursor.
+   */
+   const deleteLineBoundaryBackward = view => deleteBy(view, range => {
+       let lineStart = view.moveToLineBoundary(range, false).head;
+       return range.head > lineStart ? lineStart : Math.max(0, range.head - 1);
+   });
+   /**
+   Delete the selection, or, if it is a cursor selection, delete to
+   the end of the line or the next line wrap after the cursor.
+   */
+   const deleteLineBoundaryForward = view => deleteBy(view, range => {
+       let lineStart = view.moveToLineBoundary(range, true).head;
+       return range.head < lineStart ? lineStart : Math.min(view.state.doc.length, range.head + 1);
+   });
+   /**
+   Replace each selection range with a line break, leaving the cursor
+   on the line before the break.
+   */
+   const splitLine = ({ state, dispatch }) => {
+       if (state.readOnly)
+           return false;
+       let changes = state.changeByRange(range => {
+           return { changes: { from: range.from, to: range.to, insert: Text.of(["", ""]) },
+               range: EditorSelection.cursor(range.from) };
+       });
+       dispatch(state.update(changes, { scrollIntoView: true, userEvent: "input" }));
+       return true;
+   };
+   /**
+   Flip the characters before and after the cursor(s).
+   */
+   const transposeChars = ({ state, dispatch }) => {
+       if (state.readOnly)
+           return false;
+       let changes = state.changeByRange(range => {
+           if (!range.empty || range.from == 0 || range.from == state.doc.length)
+               return { range };
+           let pos = range.from, line = state.doc.lineAt(pos);
+           let from = pos == line.from ? pos - 1 : findClusterBreak(line.text, pos - line.from, false) + line.from;
+           let to = pos == line.to ? pos + 1 : findClusterBreak(line.text, pos - line.from, true) + line.from;
+           return { changes: { from, to, insert: state.doc.slice(pos, to).append(state.doc.slice(from, pos)) },
+               range: EditorSelection.cursor(to) };
+       });
+       if (changes.changes.empty)
+           return false;
+       dispatch(state.update(changes, { scrollIntoView: true, userEvent: "move.character" }));
+       return true;
+   };
+   function selectedLineBlocks(state) {
+       let blocks = [], upto = -1;
+       for (let range of state.selection.ranges) {
+           let startLine = state.doc.lineAt(range.from), endLine = state.doc.lineAt(range.to);
+           if (!range.empty && range.to == endLine.from)
+               endLine = state.doc.lineAt(range.to - 1);
+           if (upto >= startLine.number) {
+               let prev = blocks[blocks.length - 1];
+               prev.to = endLine.to;
+               prev.ranges.push(range);
+           }
+           else {
+               blocks.push({ from: startLine.from, to: endLine.to, ranges: [range] });
+           }
+           upto = endLine.number + 1;
+       }
+       return blocks;
+   }
+   function moveLine(state, dispatch, forward) {
+       if (state.readOnly)
+           return false;
+       let changes = [], ranges = [];
+       for (let block of selectedLineBlocks(state)) {
+           if (forward ? block.to == state.doc.length : block.from == 0)
+               continue;
+           let nextLine = state.doc.lineAt(forward ? block.to + 1 : block.from - 1);
+           let size = nextLine.length + 1;
+           if (forward) {
+               changes.push({ from: block.to, to: nextLine.to }, { from: block.from, insert: nextLine.text + state.lineBreak });
+               for (let r of block.ranges)
+                   ranges.push(EditorSelection.range(Math.min(state.doc.length, r.anchor + size), Math.min(state.doc.length, r.head + size)));
+           }
+           else {
+               changes.push({ from: nextLine.from, to: block.from }, { from: block.to, insert: state.lineBreak + nextLine.text });
+               for (let r of block.ranges)
+                   ranges.push(EditorSelection.range(r.anchor - size, r.head - size));
+           }
+       }
+       if (!changes.length)
+           return false;
+       dispatch(state.update({
+           changes,
+           scrollIntoView: true,
+           selection: EditorSelection.create(ranges, state.selection.mainIndex),
+           userEvent: "move.line"
+       }));
+       return true;
+   }
+   /**
+   Move the selected lines up one line.
+   */
+   const moveLineUp = ({ state, dispatch }) => moveLine(state, dispatch, false);
+   /**
+   Move the selected lines down one line.
+   */
+   const moveLineDown = ({ state, dispatch }) => moveLine(state, dispatch, true);
+   function copyLine(state, dispatch, forward) {
+       if (state.readOnly)
+           return false;
+       let changes = [];
+       for (let block of selectedLineBlocks(state)) {
+           if (forward)
+               changes.push({ from: block.from, insert: state.doc.slice(block.from, block.to) + state.lineBreak });
+           else
+               changes.push({ from: block.to, insert: state.lineBreak + state.doc.slice(block.from, block.to) });
+       }
+       dispatch(state.update({ changes, scrollIntoView: true, userEvent: "input.copyline" }));
+       return true;
+   }
+   /**
+   Create a copy of the selected lines. Keep the selection in the top copy.
+   */
+   const copyLineUp = ({ state, dispatch }) => copyLine(state, dispatch, false);
+   /**
+   Create a copy of the selected lines. Keep the selection in the bottom copy.
+   */
+   const copyLineDown = ({ state, dispatch }) => copyLine(state, dispatch, true);
+   /**
+   Delete selected lines.
+   */
+   const deleteLine = view => {
+       if (view.state.readOnly)
+           return false;
+       let { state } = view, changes = state.changes(selectedLineBlocks(state).map(({ from, to }) => {
+           if (from > 0)
+               from--;
+           else if (to < state.doc.length)
+               to++;
+           return { from, to };
+       }));
+       let selection = updateSel(state.selection, range => view.moveVertically(range, true)).map(changes);
+       view.dispatch({ changes, selection, scrollIntoView: true, userEvent: "delete.line" });
+       return true;
+   };
+   function isBetweenBrackets(state, pos) {
+       if (/\(\)|\[\]|\{\}/.test(state.sliceDoc(pos - 1, pos + 1)))
+           return { from: pos, to: pos };
+       let context = syntaxTree(state).resolveInner(pos);
+       let before = context.childBefore(pos), after = context.childAfter(pos), closedBy;
+       if (before && after && before.to <= pos && after.from >= pos &&
+           (closedBy = before.type.prop(NodeProp.closedBy)) && closedBy.indexOf(after.name) > -1 &&
+           state.doc.lineAt(before.to).from == state.doc.lineAt(after.from).from &&
+           !/\S/.test(state.sliceDoc(before.to, after.from)))
+           return { from: before.to, to: after.from };
+       return null;
+   }
+   /**
+   Replace the selection with a newline and indent the newly created
+   line(s). If the current line consists only of whitespace, this
+   will also delete that whitespace. When the cursor is between
+   matching brackets, an additional newline will be inserted after
+   the cursor.
+   */
+   const insertNewlineAndIndent = /*@__PURE__*/newlineAndIndent(false);
+   /**
+   Create a blank, indented line below the current line.
+   */
+   const insertBlankLine = /*@__PURE__*/newlineAndIndent(true);
+   function newlineAndIndent(atEof) {
+       return ({ state, dispatch }) => {
+           if (state.readOnly)
+               return false;
+           let changes = state.changeByRange(range => {
+               let { from, to } = range, line = state.doc.lineAt(from);
+               let explode = !atEof && from == to && isBetweenBrackets(state, from);
+               if (atEof)
+                   from = to = (to <= line.to ? line : state.doc.lineAt(to)).to;
+               let cx = new IndentContext(state, { simulateBreak: from, simulateDoubleBreak: !!explode });
+               let indent = getIndentation(cx, from);
+               if (indent == null)
+                   indent = countColumn(/^\s*/.exec(state.doc.lineAt(from).text)[0], state.tabSize);
+               while (to < line.to && /\s/.test(line.text[to - line.from]))
+                   to++;
+               if (explode)
+                   ({ from, to } = explode);
+               else if (from > line.from && from < line.from + 100 && !/\S/.test(line.text.slice(0, from)))
+                   from = line.from;
+               let insert = ["", indentString(state, indent)];
+               if (explode)
+                   insert.push(indentString(state, cx.lineIndent(line.from, -1)));
+               return { changes: { from, to, insert: Text.of(insert) },
+                   range: EditorSelection.cursor(from + 1 + insert[1].length) };
+           });
+           dispatch(state.update(changes, { scrollIntoView: true, userEvent: "input" }));
+           return true;
+       };
+   }
+   function changeBySelectedLine(state, f) {
+       let atLine = -1;
+       return state.changeByRange(range => {
+           let changes = [];
+           for (let pos = range.from; pos <= range.to;) {
+               let line = state.doc.lineAt(pos);
+               if (line.number > atLine && (range.empty || range.to > line.from)) {
+                   f(line, changes, range);
+                   atLine = line.number;
+               }
+               pos = line.to + 1;
+           }
+           let changeSet = state.changes(changes);
+           return { changes,
+               range: EditorSelection.range(changeSet.mapPos(range.anchor, 1), changeSet.mapPos(range.head, 1)) };
+       });
+   }
+   /**
+   Auto-indent the selected lines. This uses the [indentation service
+   facet](https://codemirror.net/6/docs/ref/#language.indentService) as source for auto-indent
+   information.
+   */
+   const indentSelection = ({ state, dispatch }) => {
+       if (state.readOnly)
+           return false;
+       let updated = Object.create(null);
+       let context = new IndentContext(state, { overrideIndentation: start => {
+               let found = updated[start];
+               return found == null ? -1 : found;
+           } });
+       let changes = changeBySelectedLine(state, (line, changes, range) => {
+           let indent = getIndentation(context, line.from);
+           if (indent == null)
+               return;
+           if (!/\S/.test(line.text))
+               indent = 0;
+           let cur = /^\s*/.exec(line.text)[0];
+           let norm = indentString(state, indent);
+           if (cur != norm || range.from < line.from + cur.length) {
+               updated[line.from] = indent;
+               changes.push({ from: line.from, to: line.from + cur.length, insert: norm });
+           }
+       });
+       if (!changes.changes.empty)
+           dispatch(state.update(changes, { userEvent: "indent" }));
+       return true;
+   };
+   /**
+   Add a [unit](https://codemirror.net/6/docs/ref/#language.indentUnit) of indentation to all selected
+   lines.
+   */
+   const indentMore = ({ state, dispatch }) => {
+       if (state.readOnly)
+           return false;
+       dispatch(state.update(changeBySelectedLine(state, (line, changes) => {
+           changes.push({ from: line.from, insert: state.facet(indentUnit) });
+       }), { userEvent: "input.indent" }));
+       return true;
+   };
+   /**
+   Remove a [unit](https://codemirror.net/6/docs/ref/#language.indentUnit) of indentation from all
+   selected lines.
+   */
+   const indentLess = ({ state, dispatch }) => {
+       if (state.readOnly)
+           return false;
+       dispatch(state.update(changeBySelectedLine(state, (line, changes) => {
+           let space = /^\s*/.exec(line.text)[0];
+           if (!space)
+               return;
+           let col = countColumn(space, state.tabSize), keep = 0;
+           let insert = indentString(state, Math.max(0, col - getIndentUnit(state)));
+           while (keep < space.length && keep < insert.length && space.charCodeAt(keep) == insert.charCodeAt(keep))
+               keep++;
+           changes.push({ from: line.from + keep, to: line.from + space.length, insert: insert.slice(keep) });
+       }), { userEvent: "delete.dedent" }));
+       return true;
+   };
+   /**
+   Array of key bindings containing the Emacs-style bindings that are
+   available on macOS by default.
+
+    - Ctrl-b: [`cursorCharLeft`](https://codemirror.net/6/docs/ref/#commands.cursorCharLeft) ([`selectCharLeft`](https://codemirror.net/6/docs/ref/#commands.selectCharLeft) with Shift)
+    - Ctrl-f: [`cursorCharRight`](https://codemirror.net/6/docs/ref/#commands.cursorCharRight) ([`selectCharRight`](https://codemirror.net/6/docs/ref/#commands.selectCharRight) with Shift)
+    - Ctrl-p: [`cursorLineUp`](https://codemirror.net/6/docs/ref/#commands.cursorLineUp) ([`selectLineUp`](https://codemirror.net/6/docs/ref/#commands.selectLineUp) with Shift)
+    - Ctrl-n: [`cursorLineDown`](https://codemirror.net/6/docs/ref/#commands.cursorLineDown) ([`selectLineDown`](https://codemirror.net/6/docs/ref/#commands.selectLineDown) with Shift)
+    - Ctrl-a: [`cursorLineStart`](https://codemirror.net/6/docs/ref/#commands.cursorLineStart) ([`selectLineStart`](https://codemirror.net/6/docs/ref/#commands.selectLineStart) with Shift)
+    - Ctrl-e: [`cursorLineEnd`](https://codemirror.net/6/docs/ref/#commands.cursorLineEnd) ([`selectLineEnd`](https://codemirror.net/6/docs/ref/#commands.selectLineEnd) with Shift)
+    - Ctrl-d: [`deleteCharForward`](https://codemirror.net/6/docs/ref/#commands.deleteCharForward)
+    - Ctrl-h: [`deleteCharBackward`](https://codemirror.net/6/docs/ref/#commands.deleteCharBackward)
+    - Ctrl-k: [`deleteToLineEnd`](https://codemirror.net/6/docs/ref/#commands.deleteToLineEnd)
+    - Ctrl-Alt-h: [`deleteGroupBackward`](https://codemirror.net/6/docs/ref/#commands.deleteGroupBackward)
+    - Ctrl-o: [`splitLine`](https://codemirror.net/6/docs/ref/#commands.splitLine)
+    - Ctrl-t: [`transposeChars`](https://codemirror.net/6/docs/ref/#commands.transposeChars)
+    - Ctrl-v: [`cursorPageDown`](https://codemirror.net/6/docs/ref/#commands.cursorPageDown)
+    - Alt-v: [`cursorPageUp`](https://codemirror.net/6/docs/ref/#commands.cursorPageUp)
+   */
+   const emacsStyleKeymap = [
+       { key: "Ctrl-b", run: cursorCharLeft, shift: selectCharLeft, preventDefault: true },
+       { key: "Ctrl-f", run: cursorCharRight, shift: selectCharRight },
+       { key: "Ctrl-p", run: cursorLineUp, shift: selectLineUp },
+       { key: "Ctrl-n", run: cursorLineDown, shift: selectLineDown },
+       { key: "Ctrl-a", run: cursorLineStart, shift: selectLineStart },
+       { key: "Ctrl-e", run: cursorLineEnd, shift: selectLineEnd },
+       { key: "Ctrl-d", run: deleteCharForward },
+       { key: "Ctrl-h", run: deleteCharBackward },
+       { key: "Ctrl-k", run: deleteToLineEnd },
+       { key: "Ctrl-Alt-h", run: deleteGroupBackward },
+       { key: "Ctrl-o", run: splitLine },
+       { key: "Ctrl-t", run: transposeChars },
+       { key: "Ctrl-v", run: cursorPageDown },
+   ];
+   /**
+   An array of key bindings closely sticking to platform-standard or
+   widely used bindings. (This includes the bindings from
+   [`emacsStyleKeymap`](https://codemirror.net/6/docs/ref/#commands.emacsStyleKeymap), with their `key`
+   property changed to `mac`.)
+
+    - ArrowLeft: [`cursorCharLeft`](https://codemirror.net/6/docs/ref/#commands.cursorCharLeft) ([`selectCharLeft`](https://codemirror.net/6/docs/ref/#commands.selectCharLeft) with Shift)
+    - ArrowRight: [`cursorCharRight`](https://codemirror.net/6/docs/ref/#commands.cursorCharRight) ([`selectCharRight`](https://codemirror.net/6/docs/ref/#commands.selectCharRight) with Shift)
+    - Ctrl-ArrowLeft (Alt-ArrowLeft on macOS): [`cursorGroupLeft`](https://codemirror.net/6/docs/ref/#commands.cursorGroupLeft) ([`selectGroupLeft`](https://codemirror.net/6/docs/ref/#commands.selectGroupLeft) with Shift)
+    - Ctrl-ArrowRight (Alt-ArrowRight on macOS): [`cursorGroupRight`](https://codemirror.net/6/docs/ref/#commands.cursorGroupRight) ([`selectGroupRight`](https://codemirror.net/6/docs/ref/#commands.selectGroupRight) with Shift)
+    - Cmd-ArrowLeft (on macOS): [`cursorLineStart`](https://codemirror.net/6/docs/ref/#commands.cursorLineStart) ([`selectLineStart`](https://codemirror.net/6/docs/ref/#commands.selectLineStart) with Shift)
+    - Cmd-ArrowRight (on macOS): [`cursorLineEnd`](https://codemirror.net/6/docs/ref/#commands.cursorLineEnd) ([`selectLineEnd`](https://codemirror.net/6/docs/ref/#commands.selectLineEnd) with Shift)
+    - ArrowUp: [`cursorLineUp`](https://codemirror.net/6/docs/ref/#commands.cursorLineUp) ([`selectLineUp`](https://codemirror.net/6/docs/ref/#commands.selectLineUp) with Shift)
+    - ArrowDown: [`cursorLineDown`](https://codemirror.net/6/docs/ref/#commands.cursorLineDown) ([`selectLineDown`](https://codemirror.net/6/docs/ref/#commands.selectLineDown) with Shift)
+    - Cmd-ArrowUp (on macOS): [`cursorDocStart`](https://codemirror.net/6/docs/ref/#commands.cursorDocStart) ([`selectDocStart`](https://codemirror.net/6/docs/ref/#commands.selectDocStart) with Shift)
+    - Cmd-ArrowDown (on macOS): [`cursorDocEnd`](https://codemirror.net/6/docs/ref/#commands.cursorDocEnd) ([`selectDocEnd`](https://codemirror.net/6/docs/ref/#commands.selectDocEnd) with Shift)
+    - Ctrl-ArrowUp (on macOS): [`cursorPageUp`](https://codemirror.net/6/docs/ref/#commands.cursorPageUp) ([`selectPageUp`](https://codemirror.net/6/docs/ref/#commands.selectPageUp) with Shift)
+    - Ctrl-ArrowDown (on macOS): [`cursorPageDown`](https://codemirror.net/6/docs/ref/#commands.cursorPageDown) ([`selectPageDown`](https://codemirror.net/6/docs/ref/#commands.selectPageDown) with Shift)
+    - PageUp: [`cursorPageUp`](https://codemirror.net/6/docs/ref/#commands.cursorPageUp) ([`selectPageUp`](https://codemirror.net/6/docs/ref/#commands.selectPageUp) with Shift)
+    - PageDown: [`cursorPageDown`](https://codemirror.net/6/docs/ref/#commands.cursorPageDown) ([`selectPageDown`](https://codemirror.net/6/docs/ref/#commands.selectPageDown) with Shift)
+    - Home: [`cursorLineBoundaryBackward`](https://codemirror.net/6/docs/ref/#commands.cursorLineBoundaryBackward) ([`selectLineBoundaryBackward`](https://codemirror.net/6/docs/ref/#commands.selectLineBoundaryBackward) with Shift)
+    - End: [`cursorLineBoundaryForward`](https://codemirror.net/6/docs/ref/#commands.cursorLineBoundaryForward) ([`selectLineBoundaryForward`](https://codemirror.net/6/docs/ref/#commands.selectLineBoundaryForward) with Shift)
+    - Ctrl-Home (Cmd-Home on macOS): [`cursorDocStart`](https://codemirror.net/6/docs/ref/#commands.cursorDocStart) ([`selectDocStart`](https://codemirror.net/6/docs/ref/#commands.selectDocStart) with Shift)
+    - Ctrl-End (Cmd-Home on macOS): [`cursorDocEnd`](https://codemirror.net/6/docs/ref/#commands.cursorDocEnd) ([`selectDocEnd`](https://codemirror.net/6/docs/ref/#commands.selectDocEnd) with Shift)
+    - Enter: [`insertNewlineAndIndent`](https://codemirror.net/6/docs/ref/#commands.insertNewlineAndIndent)
+    - Ctrl-a (Cmd-a on macOS): [`selectAll`](https://codemirror.net/6/docs/ref/#commands.selectAll)
+    - Backspace: [`deleteCharBackward`](https://codemirror.net/6/docs/ref/#commands.deleteCharBackward)
+    - Delete: [`deleteCharForward`](https://codemirror.net/6/docs/ref/#commands.deleteCharForward)
+    - Ctrl-Backspace (Alt-Backspace on macOS): [`deleteGroupBackward`](https://codemirror.net/6/docs/ref/#commands.deleteGroupBackward)
+    - Ctrl-Delete (Alt-Delete on macOS): [`deleteGroupForward`](https://codemirror.net/6/docs/ref/#commands.deleteGroupForward)
+    - Cmd-Backspace (macOS): [`deleteLineBoundaryBackward`](https://codemirror.net/6/docs/ref/#commands.deleteLineBoundaryBackward).
+    - Cmd-Delete (macOS): [`deleteLineBoundaryForward`](https://codemirror.net/6/docs/ref/#commands.deleteLineBoundaryForward).
+   */
+   const standardKeymap = /*@__PURE__*/[
+       { key: "ArrowLeft", run: cursorCharLeft, shift: selectCharLeft, preventDefault: true },
+       { key: "Mod-ArrowLeft", mac: "Alt-ArrowLeft", run: cursorGroupLeft, shift: selectGroupLeft, preventDefault: true },
+       { mac: "Cmd-ArrowLeft", run: cursorLineBoundaryLeft, shift: selectLineBoundaryLeft, preventDefault: true },
+       { key: "ArrowRight", run: cursorCharRight, shift: selectCharRight, preventDefault: true },
+       { key: "Mod-ArrowRight", mac: "Alt-ArrowRight", run: cursorGroupRight, shift: selectGroupRight, preventDefault: true },
+       { mac: "Cmd-ArrowRight", run: cursorLineBoundaryRight, shift: selectLineBoundaryRight, preventDefault: true },
+       { key: "ArrowUp", run: cursorLineUp, shift: selectLineUp, preventDefault: true },
+       { mac: "Cmd-ArrowUp", run: cursorDocStart, shift: selectDocStart },
+       { mac: "Ctrl-ArrowUp", run: cursorPageUp, shift: selectPageUp },
+       { key: "ArrowDown", run: cursorLineDown, shift: selectLineDown, preventDefault: true },
+       { mac: "Cmd-ArrowDown", run: cursorDocEnd, shift: selectDocEnd },
+       { mac: "Ctrl-ArrowDown", run: cursorPageDown, shift: selectPageDown },
+       { key: "PageUp", run: cursorPageUp, shift: selectPageUp },
+       { key: "PageDown", run: cursorPageDown, shift: selectPageDown },
+       { key: "Home", run: cursorLineBoundaryBackward, shift: selectLineBoundaryBackward, preventDefault: true },
+       { key: "Mod-Home", run: cursorDocStart, shift: selectDocStart },
+       { key: "End", run: cursorLineBoundaryForward, shift: selectLineBoundaryForward, preventDefault: true },
+       { key: "Mod-End", run: cursorDocEnd, shift: selectDocEnd },
+       { key: "Enter", run: insertNewlineAndIndent },
+       { key: "Mod-a", run: selectAll },
+       { key: "Backspace", run: deleteCharBackward, shift: deleteCharBackward },
+       { key: "Delete", run: deleteCharForward },
+       { key: "Mod-Backspace", mac: "Alt-Backspace", run: deleteGroupBackward },
+       { key: "Mod-Delete", mac: "Alt-Delete", run: deleteGroupForward },
+       { mac: "Mod-Backspace", run: deleteLineBoundaryBackward },
+       { mac: "Mod-Delete", run: deleteLineBoundaryForward }
+   ].concat(/*@__PURE__*/emacsStyleKeymap.map(b => ({ mac: b.key, run: b.run, shift: b.shift })));
+   /**
+   The default keymap. Includes all bindings from
+   [`standardKeymap`](https://codemirror.net/6/docs/ref/#commands.standardKeymap) plus the following:
+
+   - Alt-ArrowLeft (Ctrl-ArrowLeft on macOS): [`cursorSyntaxLeft`](https://codemirror.net/6/docs/ref/#commands.cursorSyntaxLeft) ([`selectSyntaxLeft`](https://codemirror.net/6/docs/ref/#commands.selectSyntaxLeft) with Shift)
+   - Alt-ArrowRight (Ctrl-ArrowRight on macOS): [`cursorSyntaxRight`](https://codemirror.net/6/docs/ref/#commands.cursorSyntaxRight) ([`selectSyntaxRight`](https://codemirror.net/6/docs/ref/#commands.selectSyntaxRight) with Shift)
+   - Alt-ArrowUp: [`moveLineUp`](https://codemirror.net/6/docs/ref/#commands.moveLineUp)
+   - Alt-ArrowDown: [`moveLineDown`](https://codemirror.net/6/docs/ref/#commands.moveLineDown)
+   - Shift-Alt-ArrowUp: [`copyLineUp`](https://codemirror.net/6/docs/ref/#commands.copyLineUp)
+   - Shift-Alt-ArrowDown: [`copyLineDown`](https://codemirror.net/6/docs/ref/#commands.copyLineDown)
+   - Escape: [`simplifySelection`](https://codemirror.net/6/docs/ref/#commands.simplifySelection)
+   - Ctrl-Enter (Cmd-Enter on macOS): [`insertBlankLine`](https://codemirror.net/6/docs/ref/#commands.insertBlankLine)
+   - Alt-l (Ctrl-l on macOS): [`selectLine`](https://codemirror.net/6/docs/ref/#commands.selectLine)
+   - Ctrl-i (Cmd-i on macOS): [`selectParentSyntax`](https://codemirror.net/6/docs/ref/#commands.selectParentSyntax)
+   - Ctrl-[ (Cmd-[ on macOS): [`indentLess`](https://codemirror.net/6/docs/ref/#commands.indentLess)
+   - Ctrl-] (Cmd-] on macOS): [`indentMore`](https://codemirror.net/6/docs/ref/#commands.indentMore)
+   - Ctrl-Alt-\\ (Cmd-Alt-\\ on macOS): [`indentSelection`](https://codemirror.net/6/docs/ref/#commands.indentSelection)
+   - Shift-Ctrl-k (Shift-Cmd-k on macOS): [`deleteLine`](https://codemirror.net/6/docs/ref/#commands.deleteLine)
+   - Shift-Ctrl-\\ (Shift-Cmd-\\ on macOS): [`cursorMatchingBracket`](https://codemirror.net/6/docs/ref/#commands.cursorMatchingBracket)
+   - Ctrl-/ (Cmd-/ on macOS): [`toggleComment`](https://codemirror.net/6/docs/ref/#commands.toggleComment).
+   - Shift-Alt-a: [`toggleBlockComment`](https://codemirror.net/6/docs/ref/#commands.toggleBlockComment).
+   */
+   const defaultKeymap = /*@__PURE__*/[
+       { key: "Alt-ArrowLeft", mac: "Ctrl-ArrowLeft", run: cursorSyntaxLeft, shift: selectSyntaxLeft },
+       { key: "Alt-ArrowRight", mac: "Ctrl-ArrowRight", run: cursorSyntaxRight, shift: selectSyntaxRight },
+       { key: "Alt-ArrowUp", run: moveLineUp },
+       { key: "Shift-Alt-ArrowUp", run: copyLineUp },
+       { key: "Alt-ArrowDown", run: moveLineDown },
+       { key: "Shift-Alt-ArrowDown", run: copyLineDown },
+       { key: "Escape", run: simplifySelection },
+       { key: "Mod-Enter", run: insertBlankLine },
+       { key: "Alt-l", mac: "Ctrl-l", run: selectLine },
+       { key: "Mod-i", run: selectParentSyntax, preventDefault: true },
+       { key: "Mod-[", run: indentLess },
+       { key: "Mod-]", run: indentMore },
+       { key: "Mod-Alt-\\", run: indentSelection },
+       { key: "Shift-Mod-k", run: deleteLine },
+       { key: "Shift-Mod-\\", run: cursorMatchingBracket },
+       { key: "Mod-/", run: toggleComment },
+       { key: "Alt-A", run: toggleBlockComment }
+   ].concat(standardKeymap);
 
    function crelt() {
      var elt = arguments[0];
@@ -21824,21 +23680,27 @@
        return spec.get;
    }
 
-   var grammar_text = "@top Program { stmt* stmt_nosep? }\r\n\r\n// NOTE TO SELF: HANDLE FILE \r\n// C:\\Users\\rafaed\\Downloads\\Archive.zip\\Robotics 0\\simplified navigation\r\n\r\n@skip { space | Comment }\r\n\r\nstmt { stmt_nosep? stmt_sep | Preprocessor }\r\nstmt_sep { newline | \":\" }\r\nstmt_nosep { \r\n\r\n  Debugin |\r\n  Debug |\r\n\r\n  Serin |\r\n  Serout |\r\n\r\n  I2CIn |\r\n  I2COut |\r\n\r\n  Owin |\r\n  Owout |\r\n\r\n  Lcdin |\r\n  Lcdout |\r\n  Lcdcmd |\r\n\r\n  For | \r\n  any_loop | \r\n  If |\r\n  Select |\r\n\r\n  VarDecl | \r\n  PinDecl | \r\n  ConDecl |\r\n  DataDecl |\r\n\r\n  Branch |\r\n  OnGosub |\r\n  OnGoto |\r\n\r\n  Return | \r\n  Goto | \r\n  Gosub | \r\n\r\n  End |\r\n  Exit |\r\n  Stop |\r\n\r\n  Pause |\r\n  Nap |\r\n  Sleep |\r\n\r\n  Button |\r\n  RCTime |\r\n\r\n  Pollin | \r\n  Pollout |\r\n  Pollrun |\r\n  Pollwait |\r\n  Pollmode |\r\n\r\n  Compare |\r\n\r\n  High |\r\n  Low |\r\n  Toggle |\r\n\r\n  PWM |\r\n  Random |\r\n\r\n  Input |\r\n  Output |\r\n  Reverse |\r\n\r\n  Configpin |\r\n  Count |\r\n\r\n  Auxio |\r\n  Mainio |\r\n  Ioterm |\r\n\r\n  Freqout |\r\n  Pulsout |\r\n  Pulsin |\r\n\r\n  Read |\r\n  Write |\r\n  Lookup |\r\n  Lookdown |\r\n\r\n  Get | \r\n  Put |\r\n\r\n  Store |\r\n  Run |\r\n\r\n  XOut |\r\n  DTMFOut |\r\n\r\n  Assignment |\r\n\r\n  ShiftIn |\r\n  ShiftOut |\r\n\r\n  Label\r\n}\r\n\r\n// declarations\r\nConDecl { Identifier ConKW term }\r\nPinDecl { Identifier PinKW term }\r\nVarDecl { Identifier VarKW type }\r\n\r\nDataDecl { Identifier? DataKW data_lit }\r\ndata_lit { comma_sep<DataAlloc | (WordKW? expr ~data_alloc) | DataLoc> | String }\r\nDataLoc { \"@\" decimal_int }\r\n\r\n// TODO: this conflicts very oddly with ArrayIndex! How should this be approached?\r\nDataAlloc { WordKW? lit ~data_alloc \"(\" decimal_int \")\" }\r\n\r\n// control flow\r\n\r\n// for loops\r\nFor { \r\n  ForKW Identifier \"=\" expr ToKW expr (StepKW expr)?\r\n    stmt+ \r\n  NextKW \r\n}\r\n\r\n// loops with \"do\"\r\nany_loop { LoopUntil | UntilLoop | LoopWhile | WhileLoop | Loop }\r\n\r\nLoop { DoKW stmt+ LoopKW }\r\nUntilLoop { DoKW Until stmt+ LoopKW }\r\nWhileLoop { DoKW While stmt+ LoopKW }\r\nLoopUntil { Loop Until }\r\nLoopWhile { Loop While }\r\n\r\nUntil { UntilKW Logical }\r\nWhile { WhileKW Logical }\r\n\r\n// if statements\r\nif_tail { Elseif | Else | EndifKW }\r\n\r\nIf { IfKW Logical ThenKW stmt* if_tail }\r\nElseif { ElseifKW Logical ThenKW stmt* if_tail }\r\nElse { ElseKW stmt* EndifKW }\r\n\r\n// select statements\r\nSelect { SelectKW expr Case+ CaseElse? EndselectKW }\r\nCase { CaseLabel stmt* }\r\nCaseElse { CaseElseLabel stmt* }\r\n\r\nCaseLabel { CaseKW comma_sep<pattern> }\r\nCaseElseLabel { CaseKW ElseKW }\r\n\r\n// branchers\r\nBranch { BranchKW expr \",\" \"[\" comma_sep<Identifier> \"]\" }\r\nOnGosub { OnKW expr GosubKW comma_sep<Identifier> }\r\nOnGoto { OnKW expr GotoKW comma_sep<Identifier> }\r\n\r\n// labels\r\nLabel { Identifier \":\" }\r\n\r\n// general commands\r\n\r\n// io commands\r\nDebugin { DebuginKW InputFormatExpr }\r\nDebug { DebugKW comma_sep<OutputFormatExpr> }\r\n\r\nSerin { SerinKW ser_args<InputFormatExpr> }\r\nSerout { SeroutKW ser_args<OutputFormatExpr> }\r\n\r\nser_args<fmt> {\r\n  expr (\"\\\\\" expr)? \",\"      // rpin{\\fpin}\r\n  expr \",\"                   // baudmode\r\n  (Identifier ~ plabel \",\")?          // {plabel}\r\n  (expr ~ plabel \",\" Identifier \",\")? // {timeout, tlabel}\r\n  \"[\" comma_sep<fmt> \"]\"     // format args\r\n}\r\n\r\nI2CIn { I2CInKW i2c_args<InputFormatExpr> }\r\nI2COut { I2COutKW i2c_args<OutputFormatExpr> }\r\n\r\ni2c_args<fmt> { \r\n  expr \",\"                  // pin \r\n  expr \",\"                  // slave id\r\n  (expr (\"\\\\\" expr)? \",\")?  // address / lowaddress\r\n  \"[\" comma_sep<fmt> \"]\"    // formatting data\r\n}\r\n\r\nOwin { OwinKW simple_io_args<InputFormatExpr> }\r\nOwout { OwoutKW simple_io_args<OutputFormatExpr> }\r\n\r\nLcdin { LcdinKW simple_io_args<InputFormatExpr> }\r\nLcdout { LcdoutKW simple_io_args<OutputFormatExpr> }\r\nLcdcmd { LcdcmdKW expr \",\" expr }\r\n\r\nsimple_io_args<fmt> { \r\n  expr \",\"               // pin \r\n  expr \",\"               // mode\r\n  \"[\" comma_sep<fmt> \"]\" // formatting data\r\n}\r\n\r\n// pause time\r\nPause { PauseKW expr }\r\n// nap time\r\nNap { NapKW expr }\r\n// sleep time\r\nSleep { SleepKW expr }\r\n\r\nCompare { CompareKW expr \",\" Identifier }\r\n\r\n// input\r\nInput { InputKW expr }\r\n// output\r\nOutput { OutputKW expr }\r\n// reverse\r\nReverse { ReverseKW expr }\r\n\r\nConfigpin { ConfigPinKW expr \",\" expr }\r\nCount { CountKW expr \",\" expr \",\" Identifier }\r\n\r\n// button pin, downstate, delay, rate, workspace,\r\n//      targetstate, address\r\nButton {\r\n  ButtonKW \r\n    expr \",\"        //pin\r\n    expr \",\"        //downstate\r\n    expr \",\"        //delay\r\n    expr \",\"        //rate\r\n    Identifier \",\"  //workspace\r\n    expr \",\"        //targetstate\r\n    Identifier      //address\r\n}\r\n// rctime pin, state, var\r\nRCTime { RCTimeKW lit \",\" lit \",\" Identifier }\r\n\r\nPollin { PollinKW expr \",\" expr }\r\nPollout { PolloutKW expr \",\" expr }\r\nPollrun { PollrunKW expr }\r\nPollwait { PollwaitKW expr }\r\nPollmode { PollmodeKW expr }\r\n\r\n// high pin\r\nHigh { HighKW expr }\r\n// low pin\r\nLow { LowKW expr }\r\n// low pin\r\nToggle { ToggleKW expr }\r\n\r\nPWM { PwmKW expr \",\" expr \",\" expr }\r\nRandom { RandomKW Identifier }\r\n\r\n// read data_ref, [type] variable\r\nRead { ReadKW expr \",\" comma_sep<WordKW? Identifier> }\r\nWrite { WriteKW expr \",\" comma_sep<WordKW? expr> }\r\n\r\nLookup { \r\n  LookupKW expr \",\" LookupTarget \",\" Identifier\r\n}\r\nLookdown { \r\n  LookdownKW expr comp_op? \",\" LookupTarget \",\" Identifier\r\n}\r\n\r\nLookupTarget {\r\n  \"[\" String \"]\" |\r\n  \"[\" comma_sep<lit> \"]\"\r\n}\r\n\r\nGet { GetKW expr \",\" comma_sep<WordKW? Identifier> }\r\nPut { PutKW expr \",\" comma_sep<WordKW? Identifier> }\r\n\r\nRun { RunKW expr }\r\nStore { StoreKW expr }\r\n\r\nFreqout { FreqoutKW expr \",\" expr \",\" expr }\r\nPulsout { PulsoutKW expr \",\" expr }\r\nPulsin { PulsinKW expr \",\" expr \",\" Identifier }\r\n\r\nAuxio { AuxioKW }\r\nMainio { MainioKW }\r\nIoterm { IotermKW expr }\r\n\r\nReturn { ReturnKW }\r\nGoto { GotoKW Identifier }\r\nGosub { GosubKW Identifier }\r\n\r\nEnd { EndKW }\r\nExit { ExitKW }\r\nStop { StopKW }\r\n\r\nAssignment { (ArrayIndex<Identifier> | Identifier) \"=\" expr }\r\n\r\nXOut {\r\n  XOutKW expr \",\" expr \",\" \"[\" comma_sep<XOutParam> \"]\"\r\n}\r\n\r\nXOutParam {\r\n  expr \"\\\\\" expr (\"\\\\\" expr)?\r\n}\r\n\r\nShiftIn { \r\n  ShiftInKW expr \",\" //dpin \r\n    expr \",\"         //cpin \r\n    expr \",\"         //mode \r\n    \"[\" comma_sep<ShiftArg> \"]\" //shift args\r\n}\r\nShiftOut { \r\n  ShiftOutKW expr \",\" //dpin \r\n    expr \",\"          //cpin \r\n    expr \",\"          //mode \r\n    \"[\" comma_sep<ShiftArg> \"]\" //shift args\r\n}\r\n\r\nShiftArg { Identifier (\"\\\\\" expr)? }\r\n\r\nDTMFOut { \r\n  DTMFOutKW expr \",\"        // pin\r\n    (expr \",\" expr)?        // on-off time\r\n    \"[\" comma_sep<expr> \"]\" // tones\r\n}\r\n\r\n// debug expressions are wacky\r\n\r\n// see 'serin' documentation\r\nInputFormatExpr\r\n{\r\n  (std_format_header | NumKW | SNumKW) Identifier |\r\n  StrKW Identifier \"\\\\\" decimal_int (\"\\\\\" decimal_int)? |\r\n  WaitStrKW Identifier (\"\\\\\" decimal_int)? |\r\n  SkipKW expr |\r\n  SpstrKW expr \r\n}\r\nOutputFormatExpr \r\n{\r\n  std_format_header \"?\"? expr |\r\n  AscKW \"?\" expr |\r\n  StrKW \"?\"? expr (\"\\\\\" expr)? |\r\n  RepKW expr \"\\\\\" expr |\r\n  \"?\" ? expr |\r\n  String\r\n}\r\nstd_format_header {\r\n  DecKW | SDecKW |\r\n  HexKW | SHexKW | IHexKW | ISHexKW |\r\n  BinKW | SBinKW | IBinKW | ISBinKW\r\n}\r\n\r\n// patterns\r\npattern { ValuePattern | ComparisonPattern | RangePattern }\r\n\r\nValuePattern { term }\r\nComparisonPattern { comp_op term }\r\nRangePattern { term ToKW term }\r\n\r\n// logical expressions are distinct\r\nLogical { logical_term ((AndKW | XorKW | OrKW) logical_term)* }\r\nlogical_term {Not | Condition | Paren_Logical}\r\nParen_Logical { \"(\" Logical \")\" }\r\nNot { NotKW Condition }\r\nCondition { term comp_op term }\r\n\r\ncomp_op { \"=\" | \">\" | \"<\" | \">=\" | \"<=\" | \"<>\" }\r\n\r\n// simple expressions\r\nexpr { Arith | term | CrKW }\r\n\r\nArith { term (math_op term)+ }\r\nmath_op { Plus | Minus | Mult | Divide | Mult100 | Divide100 | Shl | Shr }\r\n\r\n// terms and literals\r\nterm { ArrayIndex<term> | lit | paren }\r\n\r\nArrayIndex<base> { base \"(\" expr \")\" }\r\nlit { LowByte | HighByte | Identifier | Number | Char }\r\n\r\nLowByte { Identifier \".\" LowByteKW }\r\nHighByte { Identifier \".\" HighByteKW }\r\n\r\nparen { \"(\" expr \")\" }\r\n\r\n// types \r\ntype { ArrayType | base_type }\r\nArrayType { base_type \"(\" decimal_int \")\" }\r\nbase_type { BitKW | NibKW | ByteKW | WordKW }\r\n\r\n// general utilities\r\ncomma_sep<item> { item (\",\" newline* item)* }\r\nNumber { decimal_int | binary_int | hex_int }\r\n\r\n\r\n@tokens {\r\n  // Names\r\n  Identifier { $[a-zA-Z_] $[a-zA-Z_0-9]* }\r\n\r\n  // Numbers\r\n  decimal_int { $[0-9]+ }\r\n  binary_int { \"%\" $[01]+ }\r\n  hex_int { \"$\" $[0-9A-Fa-f]+ }\r\n\r\n  // Text-based literals\r\n  Char { '\"' (![\"\\\\] | \"\\\\\" _) '\"' }\r\n  String { '\"' (![\"\\\\] | \"\\\\\" _) (![\"\\\\] | \"\\\\\" _)+ '\"' }\r\n\r\n  // Whitespace\r\n  Comment { \"'\" ![\\n]* }\r\n  space { $[ \\t]+ }\r\n  newline { $[\\n\\r]+ }\r\n\r\n  // Preprocessor\r\n  Preprocessor { \"#\" ![\\n]* }\r\n\r\n  // Operators\r\n  // arithmetics\r\n  Plus { '+' }\r\n  Minus { '-' }\r\n  Mult { '*' }\r\n  Divide { '/' }\r\n  Mult100 { '**' }\r\n  Divide100 { '/*' }\r\n  Shl { '>>' }\r\n  Shr { '<<' }\r\n\r\n  // comparison\r\n  \"=\"\r\n  \">\"\r\n  \"<\"\r\n  \">=\"\r\n  \"<=\"\r\n  \"<>\"\r\n\r\n  // misc characters\r\n  \",\"\r\n  \"(\"\r\n  \")\"\r\n  \"[\"\r\n  \"]\"\r\n  \"?\"\r\n  \":\"\r\n  \".\"\r\n  \"\\\\\"\r\n  \"@\"\r\n}\r\n\r\n// Keywords\r\n@external specialize {Identifier} keyword from \"./specialization.ts\" {\r\n\r\n  // [[START KEYWORDS]] //\r\n\r\n  DebugKW,\r\n  DebuginKW,\r\n\r\n  I2CInKW,\r\n  I2COutKW,\r\n\r\n  SerinKW,\r\n  SeroutKW,\r\n\r\n  OwinKW,\r\n  OwoutKW,\r\n\r\n  LcdinKW,\r\n  LcdoutKW,\r\n  LcdcmdKW,\r\n\r\n  BitKW,\r\n  NibKW,\r\n  ByteKW,\r\n  WordKW,\r\n\r\n  LowByteKW,\r\n  HighByteKW,\r\n\r\n  DataKW,\r\n\r\n  VarKW,\r\n  PinKW,\r\n  ConKW,\r\n\r\n  CrKW,\r\n\r\n  StrKW,\r\n  RepKW,\r\n  \r\n  NumKW,\r\n  SNumKW,\r\n  WaitStrKW,\r\n  SkipKW,\r\n  SpstrKW,\r\n\r\n  AscKW,\r\n\r\n  DoneKW,\r\n  ReturnKW,\r\n  EndKW,\r\n  ExitKW,\r\n  StopKW,\r\n\r\n  DoKW,\r\n  LoopKW,\r\n  WhileKW,\r\n  UntilKW,\r\n\r\n  ForKW,\r\n  ToKW,\r\n  StepKW,\r\n  NextKW,\r\n\r\n  IfKW,\r\n  ThenKW,\r\n  ElseKW,\r\n  ElseifKW,\r\n  EndifKW,\r\n\r\n  AndKW,\r\n  OrKW,\r\n  XorKW,\r\n  NotKW,\r\n\r\n  GotoKW,\r\n  GosubKW,\r\n\r\n  PauseKW,\r\n  NapKW,\r\n  SleepKW,\r\n\r\n  ButtonKW,\r\n  RCTimeKW,\r\n\r\n  PollinKW,\r\n  PolloutKW,\r\n  PollrunKW,\r\n  PollwaitKW,\r\n  PollmodeKW,\r\n\r\n  CompareKW,\r\n\r\n  HighKW,\r\n  LowKW,\r\n  ToggleKW,\r\n\r\n  PwmKW,\r\n  RandomKW,\r\n\r\n  InputKW,\r\n  OutputKW,\r\n  ReverseKW,\r\n\r\n  ConfigPinKW,\r\n  CountKW,\r\n\r\n  FreqoutKW,\r\n\r\n  PulsoutKW,\r\n  PulsinKW,\r\n\r\n  ReadKW,\r\n  WriteKW,\r\n  LookupKW,\r\n  LookdownKW,\r\n\r\n  GetKW,\r\n  PutKW,\r\n\r\n  RunKW,\r\n  StoreKW,\r\n\r\n  SelectKW,\r\n  EndselectKW,\r\n  CaseKW,\r\n\r\n  BranchKW,\r\n  OnKW,\r\n\r\n  AuxioKW,\r\n  MainioKW,\r\n  IotermKW,\r\n\r\n  XOutKW,\r\n  DTMFOutKW,\r\n\r\n  ShiftInKW,\r\n  ShiftOutKW\r\n  \r\n  // [[END KEYWORDS]] //\r\n\r\n}\r\n\r\n\r\n@external specialize {Identifier} format_keyword from \"./specialization.ts\" {\r\n\r\n  // [[START FORMAT KEYWORDS]] //\r\n\r\n  DecKW,\r\n  SDecKW,\r\n\r\n  HexKW,\r\n  SHexKW,\r\n  IHexKW,\r\n  ISHexKW\r\n\r\n  BinKW,\r\n  SBinKW,\r\n  IBinKW,\r\n  ISBinKW\r\n\r\n  // [[END FORMAT KEYWORDS]] //\r\n\r\n}";
+   var grammar_text = "@top Program { stmt* stmt_nosep? }\r\n\r\n// NOTE TO SELF: HANDLE FILE \r\n// C:\\Users\\rafaed\\Downloads\\Archive.zip\\Robotics 0\\simplified navigation\r\n\r\n@skip { space | Comment }\r\n\r\nstmt { stmt_nosep? stmt_sep | Preprocessor }\r\nstmt_sep { newline | \":\" }\r\nstmt_nosep { \r\n\r\n  Debugin |\r\n  Debug |\r\n\r\n  Serin |\r\n  Serout |\r\n\r\n  I2CIn |\r\n  I2COut |\r\n\r\n  Owin |\r\n  Owout |\r\n\r\n  Lcdin |\r\n  Lcdout |\r\n  Lcdcmd |\r\n\r\n  For | \r\n  any_loop | \r\n  If |\r\n  Select |\r\n\r\n  VarDecl | \r\n  PinDecl | \r\n  ConDecl |\r\n  DataDecl |\r\n\r\n  Branch |\r\n  OnGosub |\r\n  OnGoto |\r\n\r\n  Return | \r\n  Goto | \r\n  Gosub | \r\n\r\n  End |\r\n  Exit |\r\n  Stop |\r\n\r\n  Pause |\r\n  Nap |\r\n  Sleep |\r\n\r\n  Button |\r\n  RCTime |\r\n\r\n  Pollin | \r\n  Pollout |\r\n  Pollrun |\r\n  Pollwait |\r\n  Pollmode |\r\n\r\n  Compare |\r\n\r\n  High |\r\n  Low |\r\n  Toggle |\r\n\r\n  PWM |\r\n  Random |\r\n\r\n  Input |\r\n  Output |\r\n  Reverse |\r\n\r\n  Configpin |\r\n  Count |\r\n\r\n  Auxio |\r\n  Mainio |\r\n  Ioterm |\r\n\r\n  Freqout |\r\n  Pulsout |\r\n  Pulsin |\r\n\r\n  Read |\r\n  Write |\r\n  Lookup |\r\n  Lookdown |\r\n\r\n  Get | \r\n  Put |\r\n\r\n  Store |\r\n  Run |\r\n\r\n  XOut |\r\n  DTMFOut |\r\n\r\n  Assignment |\r\n\r\n  ShiftIn |\r\n  ShiftOut |\r\n\r\n  Label\r\n}\r\n\r\n// declarations\r\nConDecl { Defident ConKW term }\r\nPinDecl { Defident PinKW term }\r\nVarDecl { Defident VarKW type }\r\n\r\nDataDecl { Defident? DataKW DataLit }\r\nDataLit { comma_sep<DataAlloc | (WordKW? expr ~data_alloc) | DataLoc> | String }\r\nDataLoc { \"@\" DecimalInt }\r\n\r\n// TODO: this conflicts very oddly with ArrayIndex! How should this be approached?\r\nDataAlloc { WordKW? lit ~data_alloc \"(\" DecimalInt \")\" }\r\n\r\n// control flow\r\n\r\n// for loops\r\nFor { \r\n  ForHeader\r\n    stmt+ \r\n  NextKW \r\n}\r\nForHeader { ForKW Identifier \"=\" expr ToKW expr (StepKW expr)? }\r\n\r\n// loops with \"do\"\r\nany_loop { LoopUntil | UntilLoop | LoopWhile | WhileLoop | Loop }\r\n\r\nLoop { DoKW stmt+ LoopKW }\r\nUntilLoop { DoUntil stmt+ LoopKW }\r\nWhileLoop { DoWhile stmt+ LoopKW }\r\nLoopUntil { Loop Until }\r\nLoopWhile { Loop While }\r\n\r\nDoUntil { DoKW Until }\r\nDoWhile { DoKW While }\r\n\r\nUntil { UntilKW Logical }\r\nWhile { WhileKW Logical }\r\n\r\n// if statements\r\nIfTail { Elseif | Else | EndifKW }\r\n\r\nIf { IfKW Logical ThenKW stmt* IfTail }\r\nElseif { ElseifKW Logical ThenKW stmt* IfTail }\r\nElse { ElseKW stmt* EndifKW }\r\n\r\n// select statements\r\nSelect { SelectKW expr Case+ CaseElse? EndselectKW }\r\nCase { CaseLabel stmt* }\r\nCaseElse { CaseElseLabel stmt* }\r\n\r\nCaseLabel { CaseKW comma_sep<pattern> }\r\nCaseElseLabel { CaseKW ElseKW }\r\n\r\n// branchers\r\nBranch { BranchKW expr \",\" \"[\" comma_sep<Identifier> \"]\" }\r\nOnGosub { OnKW expr GosubKW comma_sep<Identifier> }\r\nOnGoto { OnKW expr GotoKW comma_sep<Identifier> }\r\n\r\n// labels\r\nLabel { Defident \":\" }\r\n\r\n// general commands\r\n\r\n// io commands\r\nDebugin { DebuginKW InputFormatExpr }\r\nDebug { DebugKW comma_sep<OutputFormatExpr> }\r\n\r\nSerin { SerinKW ser_args<InputFormatExpr> }\r\nSerout { SeroutKW ser_args<OutputFormatExpr> }\r\n\r\nser_args<fmt> {\r\n  expr (\"\\\\\" expr)? \",\"      // rpin{\\fpin}\r\n  expr \",\"                   // baudmode\r\n  (Identifier ~ plabel \",\")?          // {plabel}\r\n  (expr ~ plabel \",\" Identifier \",\")? // {timeout, tlabel}\r\n  \"[\" comma_sep<fmt> \"]\"     // format args\r\n}\r\n\r\nI2CIn { I2CInKW i2c_args<InputFormatExpr> }\r\nI2COut { I2COutKW i2c_args<OutputFormatExpr> }\r\n\r\ni2c_args<fmt> { \r\n  expr \",\"                  // pin \r\n  expr \",\"                  // slave id\r\n  (expr (\"\\\\\" expr)? \",\")?  // address / lowaddress\r\n  \"[\" comma_sep<fmt> \"]\"    // formatting data\r\n}\r\n\r\nOwin { OwinKW simple_io_args<InputFormatExpr> }\r\nOwout { OwoutKW simple_io_args<OutputFormatExpr> }\r\n\r\nLcdin { LcdinKW simple_io_args<InputFormatExpr> }\r\nLcdout { LcdoutKW simple_io_args<OutputFormatExpr> }\r\nLcdcmd { LcdcmdKW expr \",\" expr }\r\n\r\nsimple_io_args<fmt> { \r\n  expr \",\"               // pin \r\n  expr \",\"               // mode\r\n  \"[\" comma_sep<fmt> \"]\" // formatting data\r\n}\r\n\r\n// pause time\r\nPause { PauseKW expr }\r\n// nap time\r\nNap { NapKW expr }\r\n// sleep time\r\nSleep { SleepKW expr }\r\n\r\nCompare { CompareKW expr \",\" Identifier }\r\n\r\n// input\r\nInput { InputKW expr }\r\n// output\r\nOutput { OutputKW expr }\r\n// reverse\r\nReverse { ReverseKW expr }\r\n\r\nConfigpin { ConfigPinKW expr \",\" expr }\r\nCount { CountKW expr \",\" expr \",\" Identifier }\r\n\r\n// button pin, downstate, delay, rate, workspace,\r\n//      targetstate, address\r\nButton {\r\n  ButtonKW \r\n    expr \",\"        //pin\r\n    expr \",\"        //downstate\r\n    expr \",\"        //delay\r\n    expr \",\"        //rate\r\n    Identifier \",\"  //workspace\r\n    expr \",\"        //targetstate\r\n    Identifier      //address\r\n}\r\n// rctime pin, state, var\r\nRCTime { RCTimeKW lit \",\" lit \",\" Identifier }\r\n\r\nPollin { PollinKW expr \",\" expr }\r\nPollout { PolloutKW expr \",\" expr }\r\nPollrun { PollrunKW expr }\r\nPollwait { PollwaitKW expr }\r\nPollmode { PollmodeKW expr }\r\n\r\n// high pin\r\nHigh { HighKW expr }\r\n// low pin\r\nLow { LowKW expr }\r\n// low pin\r\nToggle { ToggleKW expr }\r\n\r\nPWM { PwmKW expr \",\" expr \",\" expr }\r\nRandom { RandomKW Identifier }\r\n\r\n// read data_ref, [type] variable\r\nRead { ReadKW expr \",\" comma_sep<WordKW? Identifier> }\r\nWrite { WriteKW expr \",\" comma_sep<WordKW? expr> }\r\n\r\nLookup { \r\n  LookupKW expr \",\" LookupTarget \",\" Identifier\r\n}\r\nLookdown { \r\n  LookdownKW expr comp_op? \",\" LookupTarget \",\" Identifier\r\n}\r\n\r\nLookupTarget {\r\n  \"[\" String \"]\" |\r\n  \"[\" comma_sep<lit> \"]\"\r\n}\r\n\r\nGet { GetKW expr \",\" comma_sep<WordKW? Identifier> }\r\nPut { PutKW expr \",\" comma_sep<WordKW? Identifier> }\r\n\r\nRun { RunKW expr }\r\nStore { StoreKW expr }\r\n\r\nFreqout { FreqoutKW expr \",\" expr \",\" expr }\r\nPulsout { PulsoutKW expr \",\" expr }\r\nPulsin { PulsinKW expr \",\" expr \",\" Identifier }\r\n\r\nAuxio { AuxioKW }\r\nMainio { MainioKW }\r\nIoterm { IotermKW expr }\r\n\r\nReturn { ReturnKW }\r\nGoto { GotoKW Identifier }\r\nGosub { GosubKW Identifier }\r\n\r\nEnd { EndKW }\r\nExit { ExitKW }\r\nStop { StopKW }\r\n\r\nAssignment { (ArrayIndex<Identifier> | Identifier) \"=\" expr }\r\n\r\nXOut {\r\n  XOutKW expr \",\" expr \",\" \"[\" comma_sep<XOutParam> \"]\"\r\n}\r\n\r\nXOutParam {\r\n  expr \"\\\\\" expr (\"\\\\\" expr)?\r\n}\r\n\r\nShiftIn { \r\n  ShiftInKW expr \",\" //dpin \r\n    expr \",\"         //cpin \r\n    expr \",\"         //mode \r\n    \"[\" comma_sep<ShiftArg> \"]\" //shift args\r\n}\r\nShiftOut { \r\n  ShiftOutKW expr \",\" //dpin \r\n    expr \",\"          //cpin \r\n    expr \",\"          //mode \r\n    \"[\" comma_sep<ShiftArg> \"]\" //shift args\r\n}\r\n\r\nShiftArg { Identifier (\"\\\\\" expr)? }\r\n\r\nDTMFOut { \r\n  DTMFOutKW expr \",\"        // pin\r\n    (expr \",\" expr)?        // on-off time\r\n    \"[\" comma_sep<expr> \"]\" // tones\r\n}\r\n\r\n// debug expressions are wacky\r\n\r\n// see 'serin' documentation\r\nInputFormatExpr\r\n{\r\n  (std_format_header | NumKW | SNumKW) Identifier |\r\n  StrKW Identifier \"\\\\\" DecimalInt (\"\\\\\" DecimalInt)? |\r\n  WaitStrKW Identifier (\"\\\\\" DecimalInt)? |\r\n  SkipKW expr |\r\n  SpstrKW expr \r\n}\r\nOutputFormatExpr \r\n{\r\n  std_format_header \"?\"? expr |\r\n  AscKW \"?\" expr |\r\n  StrKW \"?\"? expr (\"\\\\\" expr)? |\r\n  RepKW expr \"\\\\\" expr |\r\n  \"?\" ? expr |\r\n  String\r\n}\r\nstd_format_header {\r\n  DecKW | SDecKW |\r\n  HexKW | SHexKW | IHexKW | ISHexKW |\r\n  BinKW | SBinKW | IBinKW | ISBinKW\r\n}\r\n\r\n// patterns\r\npattern { ValuePattern | ComparisonPattern | RangePattern }\r\n\r\nValuePattern { term }\r\nComparisonPattern { comp_op term }\r\nRangePattern { term ToKW term }\r\n\r\n// logical expressions are distinct\r\nLogical { logical_term ((AndKW | XorKW | OrKW) logical_term)* }\r\nlogical_term {Not | Condition | Paren_Logical}\r\nParen_Logical { \"(\" Logical \")\" }\r\nNot { NotKW Condition }\r\nCondition { term comp_op term }\r\n\r\ncomp_op { \"=\" | \">\" | \"<\" | \">=\" | \"<=\" | \"<>\" }\r\n\r\n// simple expressions\r\nexpr { Arith | term | CrKW }\r\n\r\nArith { term (math_op term)+ }\r\nmath_op { Plus | Minus | Mult | Divide | Mult100 | Divide100 | Shl | Shr }\r\n\r\n// terms and literals\r\nterm { ArrayIndex<term> | lit | paren }\r\n\r\nArrayIndex<base> { base \"(\" expr \")\" }\r\nlit { LowByte | HighByte | Identifier | Number | Char }\r\n\r\nLowByte { Identifier \".\" LowByteKW }\r\nHighByte { Identifier \".\" HighByteKW }\r\n\r\nparen { \"(\" expr \")\" }\r\n\r\n// types \r\ntype { ArrayType | base_type }\r\nArrayType { base_type \"(\" DecimalInt \")\" }\r\nbase_type { BitKW | NibKW | ByteKW | WordKW }\r\n\r\n// general utilities\r\ncomma_sep<item> { item (\",\" newline* item)* }\r\nNumber { DecimalInt | binary_int | hex_int }\r\n\r\nDefident { Identifier }\r\n\r\n@tokens {\r\n  // Names\r\n  Identifier { $[a-zA-Z_] $[a-zA-Z_0-9]* }\r\n\r\n  // Numbers\r\n  DecimalInt { $[0-9]+ }\r\n  binary_int { \"%\" $[01]+ }\r\n  hex_int { \"$\" $[0-9A-Fa-f]+ }\r\n\r\n  // Text-based literals\r\n  Char { '\"' (![\"\\\\] | \"\\\\\" _) '\"' }\r\n  String { '\"' (![\"\\\\] | \"\\\\\" _) (![\"\\\\] | \"\\\\\" _)+ '\"' }\r\n\r\n  // Whitespace\r\n  Comment { \"'\" ![\\n]* }\r\n  space { $[ \\t]+ }\r\n  newline { $[\\n\\r]+ }\r\n\r\n  // Preprocessor\r\n  Preprocessor { \"#\" ![\\n]* }\r\n\r\n  // Operators\r\n  // arithmetics\r\n  Plus { '+' }\r\n  Minus { '-' }\r\n  Mult { '*' }\r\n  Divide { '/' }\r\n  Mult100 { '**' }\r\n  Divide100 { '/*' }\r\n  Shl { '>>' }\r\n  Shr { '<<' }\r\n\r\n  // comparison\r\n  \"=\"\r\n  \">\"\r\n  \"<\"\r\n  \">=\"\r\n  \"<=\"\r\n  \"<>\"\r\n\r\n  // misc characters\r\n  \",\"\r\n  \"(\"\r\n  \")\"\r\n  \"[\"\r\n  \"]\"\r\n  \"?\"\r\n  \":\"\r\n  \".\"\r\n  \"\\\\\"\r\n  \"@\"\r\n}\r\n\r\n// Keywords\r\n@external specialize {Identifier} keyword from \"./specialization.ts\" {\r\n\r\n  // [[START KEYWORDS]] //\r\n\r\n  DebugKW,\r\n  DebuginKW,\r\n\r\n  I2CInKW,\r\n  I2COutKW,\r\n\r\n  SerinKW,\r\n  SeroutKW,\r\n\r\n  OwinKW,\r\n  OwoutKW,\r\n\r\n  LcdinKW,\r\n  LcdoutKW,\r\n  LcdcmdKW,\r\n\r\n  BitKW,\r\n  NibKW,\r\n  ByteKW,\r\n  WordKW,\r\n\r\n  LowByteKW,\r\n  HighByteKW,\r\n\r\n  DataKW,\r\n\r\n  VarKW,\r\n  PinKW,\r\n  ConKW,\r\n\r\n  CrKW,\r\n\r\n  StrKW,\r\n  RepKW,\r\n  \r\n  NumKW,\r\n  SNumKW,\r\n  WaitStrKW,\r\n  SkipKW,\r\n  SpstrKW,\r\n\r\n  AscKW,\r\n\r\n  DoneKW,\r\n  ReturnKW,\r\n  EndKW,\r\n  ExitKW,\r\n  StopKW,\r\n\r\n  DoKW,\r\n  LoopKW,\r\n  WhileKW,\r\n  UntilKW,\r\n\r\n  ForKW,\r\n  ToKW,\r\n  StepKW,\r\n  NextKW,\r\n\r\n  IfKW,\r\n  ThenKW,\r\n  ElseKW,\r\n  ElseifKW,\r\n  EndifKW,\r\n\r\n  AndKW,\r\n  OrKW,\r\n  XorKW,\r\n  NotKW,\r\n\r\n  GotoKW,\r\n  GosubKW,\r\n\r\n  PauseKW,\r\n  NapKW,\r\n  SleepKW,\r\n\r\n  ButtonKW,\r\n  RCTimeKW,\r\n\r\n  PollinKW,\r\n  PolloutKW,\r\n  PollrunKW,\r\n  PollwaitKW,\r\n  PollmodeKW,\r\n\r\n  CompareKW,\r\n\r\n  HighKW,\r\n  LowKW,\r\n  ToggleKW,\r\n\r\n  PwmKW,\r\n  RandomKW,\r\n\r\n  InputKW,\r\n  OutputKW,\r\n  ReverseKW,\r\n\r\n  ConfigPinKW,\r\n  CountKW,\r\n\r\n  FreqoutKW,\r\n\r\n  PulsoutKW,\r\n  PulsinKW,\r\n\r\n  ReadKW,\r\n  WriteKW,\r\n  LookupKW,\r\n  LookdownKW,\r\n\r\n  GetKW,\r\n  PutKW,\r\n\r\n  RunKW,\r\n  StoreKW,\r\n\r\n  SelectKW,\r\n  EndselectKW,\r\n  CaseKW,\r\n\r\n  BranchKW,\r\n  OnKW,\r\n\r\n  AuxioKW,\r\n  MainioKW,\r\n  IotermKW,\r\n\r\n  XOutKW,\r\n  DTMFOutKW,\r\n\r\n  ShiftInKW,\r\n  ShiftOutKW\r\n  \r\n  // [[END KEYWORDS]] //\r\n\r\n}\r\n\r\n\r\n@external specialize {Identifier} format_keyword from \"./specialization.ts\" {\r\n\r\n  // [[START FORMAT KEYWORDS]] //\r\n\r\n  DecKW,\r\n  SDecKW,\r\n\r\n  HexKW,\r\n  SHexKW,\r\n  IHexKW,\r\n  ISHexKW\r\n\r\n  BinKW,\r\n  SBinKW,\r\n  IBinKW,\r\n  ISBinKW\r\n\r\n  // [[END FORMAT KEYWORDS]] //\r\n\r\n}";
 
-   // read keywords from grammar file
+   /**
+    * Read keywords in a provided group from the given grammar.
+    */
    function readKeywords(header_name, grammar) {
        var _a, _b;
+       // Get the text inside the given header
        const start = `START ${header_name}`;
        const end = `END ${header_name}`;
        const start_index = (_a = grammar.match(start)) === null || _a === void 0 ? void 0 : _a.index;
        const end_index = (_b = grammar.match(end)) === null || _b === void 0 ? void 0 : _b.index;
        const match = grammar.substring(start_index !== null && start_index !== void 0 ? start_index : 0, end_index);
+       // Get all keywords defined within the region
        const keywords = match.match(/[\w\d_]+KW/gm);
-       console.log(keywords);
+       // If none were found, return empty
        if (keywords === null) {
            return [];
        }
+       // For each keyword found, modify it to be in lowercase, 
+       // keyword-only form.
        keywords.forEach((value, index) => {
            keywords[index] = value
                .substring(0, value.length - 2)
@@ -21846,7 +23708,9 @@
        });
        return keywords;
    }
-   // convert string list to mapping
+   /**
+    * Convert the given word list to a term map
+    */
    function convertToTermMap(arr, offset) {
        offset = offset !== null && offset !== void 0 ? offset : 0;
        let out = {};
@@ -21855,20 +23719,26 @@
        }
        return out;
    }
-   // read keyword map
+   // Standard keyword map
    const kws = readKeywords('KEYWORDS', grammar_text);
    const kwTypes = kws.map(x => { var _a; return ((_a = x.at(0)) === null || _a === void 0 ? void 0 : _a.toUpperCase()) + x.substring(1) + 'KW'; });
    const kwMap = convertToTermMap(kws);
+   // Format keyword map
    const formatKWs = readKeywords('FORMAT KEYWORDS', grammar_text);
    const formatKWTypes = formatKWs.map(x => { var _a; return ((_a = x.at(0)) === null || _a === void 0 ? void 0 : _a.toUpperCase()) + x.substring(1) + 'KW'; });
    const formatKwMap = convertToTermMap(formatKWs, kws.length);
-   // actual specialization logic
+   /**
+    * Specialize for standard keywords
+    */
    function keyword(value, stack) {
        const key = value.toLowerCase();
        if (kwMap[key])
            return kwMap[key];
        return -1;
    }
+   /**
+    * Specialize for format keywords
+    */
    function format_keyword(value, stack) {
        let key = value.toLowerCase();
        // remove ending digits
@@ -21883,19 +23753,149 @@
    // This file was generated by lezer-generator. You probably shouldn't edit it.
    const parser = LRParser.deserialize({
      version: 14,
-     states: "!EdQYQPOOO%mQPO'#EoO&qQPO'#FUO(XQPO'#FZO(XQPO'#F^O(XQPO'#F_O(XQPO'#F`O(XQPO'#FaO(XQPO'#FbO(XQPO'#FcO(XQPO'#FdO(XQPO'#FeO(pQPO'#FfO(uQPO'#FiO)PQPO'#I`OOQO'#I`'#I`O)bQPO'#FxO(XQPO'#F{O)yQPO'#HdO*bQPO'#GXO(XQPO'#G]O(XQPO'#G^OOQO'#G`'#G`O*oQPO'#GaO*tQPO'#GbOOQO'#Gc'#GcOOQO'#Gd'#GdOOQO'#Ge'#GeO(XQPO'#GfO(XQPO'#GgO(XQPO'#GhO(XQPO'#GiO*yQPO'#GjO(XQPO'#GkO(XQPO'#GlO(XQPO'#GmO(XQPO'#GnO(XQPO'#GoO(XQPO'#GpO(XQPO'#GqO(XQPO'#GrO(XQPO'#GsO(XQPO'#GtO+[QPO'#GuO(XQPO'#GvO(XQPO'#GwO(XQPO'#GxO(XQPO'#GyO(XQPO'#GzOOQO'#G{'#G{OOQO'#G|'#G|O(XQPO'#G}O(XQPO'#HOO(XQPO'#HPO(XQPO'#HQO(XQPO'#HRO(XQPO'#HSO(XQPO'#HTO(XQPO'#HVO(XQPO'#HWO(XQPO'#HXO(XQPO'#HYO(XQPO'#HZO(XQPO'#H[O(XQPO'#H^O+aQPO'#H_O(XQPO'#HaO(XQPO'#HcOOQO'#H{'#H{OOQO'#Iq'#IqOOQO'#Hz'#HzQ+fQPO'#HzOOQO'#Hg'#HgQYQPOOOOQO'#H|'#H|O+nQPO'#EpO+sQPO'#EpO+xQPO'#EpO(XQPO'#EpOOQO,5;Z,5;ZO,oQPO'#IOO2uQPO'#IQOOQO'#Ez'#EzOOQO'#IQ'#IQO(XQPO'#ITOOQO'#IP'#IPOOQO'#IO'#IOO8gQPO'#FVO8nQPO'#FVO8sQPO'#FVO(XQPO'#FVOOQO'#FV'#FVO(XQPO'#FVO8zQPO'#IVOOQO,5;p,5;pO9]QPO'#IXOOQO,5;u,5;uO9eQPO'#IZOOQO,5;x,5;xO9mQPO'#I[OOQO,5;y,5;yO9rQPO'#I]OOQO,5;z,5;zO9wQPO'#I^OOQO,5;{,5;{O9|QPO'#I_OOQO,5;|,5;|OOQO,5;},5;}OOQO,5<O,5<OO:RQPO,5<PO:WQPO,5<QO:]QPO,5<TO)bQPO'#FjOYQPO,5<`O)bQPO'#FvOYQPO,5<cOOQO,5<S,5<SOOQO,5<a,5<aO:dQPO'#FmO:{QPO'#ITO;SQPO'#FlOOQO'#Ia'#IaO;ZQPO'#FkO@QQPO,5<dO@VQPO,5<gO@[QPO,5<oO;SQPO,5<qO;SQPO,5<rO*bQPO,5<sO(XQPO,5=zO(XQPO,5=yOOQO,5>O,5>OOAeQPO'#IPO(XQPO'#IiOAlQPO'#GZOAqQPO'#IiOOQO'#Ih'#IhOOQO,5<s,5<sOBPQPO,5<wOBUQPO,5<xOOQO,5<{,5<{OOQO,5<|,5<|OOQO,5=Q,5=QOOQO,5=R,5=ROOQO,5=S,5=SOB^QPO,5=TOBcQPO,5=UOBhQPO,5=VOBmQPO,5=WOOQO,5=X,5=XOOQO,5=Y,5=YOOQO,5=Z,5=ZOBrQPO,5=[OOQO,5=],5=]OOQO,5=^,5=^OOQO,5=_,5=_OBwQPO,5=`OOQO,5=a,5=aOOQO,5=b,5=bOOQO,5=c,5=cOOQO,5=d,5=dOB|QPO,5=eOCRQPO,5=fOOQO,5=i,5=iOCWQPO,5=jOC]QPO,5=kOCbQPO,5=lOCgQPO,5=mOClQPO,5=nOCqQPO,5=oOCvQPO,5=qOC}QPO,5=rODSQPO,5=sOOQO,5=t,5=tOOQO,5=u,5=uODXQPO,5=vOD^QPO,5=xODcQPO,5={ODhQPO,5=}OOQO,5>f,5>fOOQO-E;e-E;eOOQO,5;[,5;[ODmQPO,5;[ODrQPO,5;[O(XQPO,5;`OOQO'#IU'#IUO;SQPO'#HhOErQPO,5;_OKWQPO,5;cOK`QPO,5>oOOQO,5;q,5;qO(XQPO,5;qOKeQPO,5;qO(XQPO,5;qOKyQPO,5;qOLOQPO'#HiOLVQPO,5>qO(XQPO,5>sO(XQPO,5>sO(XQPO,5>uO(XQPO,5>uO(XQPO,5>vO(XQPO,5>wO(XQPO,5>xO(XQPO,5>yO(XQPO1G1kO(XQPO1G1lOOQO1G1o1G1oOOQO,5<U,5<UOLhQPO1G1zOOQO,5<b,5<bOLoQPO1G1}OOQO'#Ib'#IbO;SQPO,5<XOLvQPO'#IOOM^QPO,5<_OOQO,5<W,5<WO)bQPO'#HlOMcQPO,5<VO!$YQPO1G2OO!$gQPO'#F}O!$}QPO'#F|OOQO'#Hm'#HmO!%XQPO1G2ROOQO'#Ig'#IgO!%aQPO'#IfOOQO'#If'#IfOOQO1G2Z1G2ZO!%oQPO1G2]O!%}QPO1G2^OOQO1G2_1G2_O!&]QPO1G3fOOQO1G3e1G3eO!&bQPO,5<tO!&gQPO,5<tO!&nQPO,5?TOOQO,5<u,5<uO!&|QPO'#HoO!&nQPO,5?TO!'ZQPO1G2cO!'`QPO1G2dO!'`QPO1G2eO(XQPO1G2oO*yQPO1G2pO(XQPO1G2qO(XQPO1G2rO!'eQPO1G2vO(XQPO1G2zO(XQPO1G3PO(XQPO1G3QO(XQPO1G3UO(XQPO1G3VO(XQPO1G3WO!'jQPO1G3XO!'rQPO1G3YO!'yQPO1G3ZO!'yQPO1G3]O!(OQPO1G3]O!'jQPO1G3^O!'jQPO1G3_O(XQPO1G3bO!(TQPO1G3dO(XQPO1G3gO(XQPO1G3iO!([QPO1G0vO!(aQPO1G0vO!(fQPO1G0zO!(kQPO,5>SOOQO-E;f-E;fOOQO1G0}1G0}OOQO1G1P1G1POOQO1G4Z1G4ZOOQO1G1]1G1]O(XQPO1G1]O!.jQPO1G1]OOQO'#Hj'#HjOLOQPO,5>TOOQO,5>T,5>TOOQO-E;g-E;gO!/OQPO1G4_O!/TQPO1G4_O!/YQPO1G4aO!/_QPO1G4aO!/dQPO1G4bO!/iQPO1G4cO!/nQPO1G4dO!/sQPO1G4eOOQO7+'V7+'VO!/xQPO7+'WOOQO7+'f7+'fOOQO7+'i7+'iO!/}QPO1G1sOOQO1G1y1G1yOOQO,5>W,5>WOOQO-E;j-E;jO)bQPO'#FyO!4wQPO'#FzOOQO'#Ic'#IcOOQO7+'j7+'jO!$YQPO7+'jO!5OQPO'#GOO;SQPO'#GPOOQO'#Ie'#IeO!9rQPO'#IdOOQO,5<i,5<iO!>`QPO,5<hO!>jQPO'#F}OOQO-E;k-E;kO!?TQPO'#GROOQO7+'m7+'mO!?[QPO7+'mO!?aQPO,5<pOOQO7+)Q7+)QO!?fQPO1G2`O!?kQPO1G2`O!?pQPO1G4oO!@OQPO,5>ZO(XQPO,5>ZOOQO,5>Z,5>ZOOQO-E;m-E;mO!'`QPO7+'}O!@]QPO'#IjOOQO7+(O7+(OOOQO7+(P7+(PO!@nQPO7+(ZO!@sQPO7+([OOQO7+(]7+(]OOQO7+(^7+(^OOQO7+(b7+(bO!@xQPO7+(fOOQO7+(k7+(kO!@}QPO7+(lO!ASQPO7+(pOOQO7+(q7+(qO!AXQPO7+(rO!A^QPO'#IkO!AlQPO'#IkOOQO7+(s7+(sO!AqQPO'#IlO(XQPO'#IlOOQO7+(t7+(tO!BPQPO'#HUO!BWQPO7+(uO!B]QPO7+(wO!'yQPO7+(wOOQO7+(x7+(xOOQO7+(y7+(yO!BbQPO7+(|O(XQPO7+)OO!BgQPO7+)OO!BlQPO7+)RO!BqQPO7+)TO!BvQPO7+&bOOQO7+&b7+&bOOQO7+&f7+&fOOQO7+&w7+&wO(XQPO7+&wOOQO-E;h-E;hOOQO1G3o1G3oO!CpQPO7+)yO(XQPO7+)yO!CzQPO7+){O(XQPO7+){O!DUQPO7+)|O!D]QPO7+)}O!DdQPO7+*OO!DiQPO7+*PO(XQPO<<JrO!DnQPO,5<eOOQO,5<f,5<fO!DsQPO,5<fOOQO<<KU<<KUO;SQPO,5<lO!DzQPO,5<kO!IkQPO'#HnO!JUQPO,5?OOOQO,5<n,5<nO!NrQPO,5<mOOQO<<KX<<KXO!NyQPO1G2[OOQO7+'z7+'zO# OQPO7+'zO(XQPO1G3uOOQO1G3u1G3uO# TQPO<<KiO# YQPO'#HpO# bQPO,5?UO(XQPO<<KuO# sQPO<<KvO(XQPO<<LQO# xQPO<<LWO(XQPO<<L[O# }QPO<<L^O#!SQPO'#HqO#!_QPO,5?VO#!_QPO,5?VO#!mQPO'#HrO#!wQPO,5?WO#!wQPO,5?WO##VQPO'#ImO##_QPO,5=pO##dQPO<<LaO##iQPO<<LcO##nQPO<<LcO##sQPO<<LhO##xQPO'#IoO#$QQPO<<LjO(XQPO<<LjO(XQPO<<LmO(XQPO<<LoO#$VQPO<<I|OOQO<<Jc<<JcO#$[QPO<<MeO%mQPO<<MeO#$cQPO<<MeO#$hQPO<<MeO#$mQPO<<MgO&qQPO<<MgO#$tQPO<<MgO#$yQPO<<MgO%mQPO<<MhO#%OQPO<<MhO&qQPO<<MiO#%WQPO<<MiO%mQPO<<MjO&qQPO<<MkO#%`QPOAN@^O!$YQPO1G2POOQO1G2Q1G2QO#%gQPO1G2WO!IkQPO,5>YOOQO,5>Y,5>YOOQO-E;l-E;lOOQO7+'v7+'vOOQO<<Kf<<KfOOQO7+)a7+)aOOQOANATANATO#*WQPO,5>[OOQO,5>[,5>[OOQO-E;n-E;nO#*`QPOANAaOOQOANAbANAbOOQOANAlANAlOOQOANArANArOOQOANAvANAvOOQOANAxANAxO#*eQPO,5>]OOQO,5>],5>]O#*pQPO,5>]OOQO-E;o-E;oO#*uQPO1G4qO#+TQPO,5>^OOQO,5>^,5>^O(XQPO,5>^OOQO-E;p-E;pO#+_QPO1G4rO#+mQPO'#HsO#+tQPO,5?XOOQO1G3[1G3[OOQOANA{ANA{OOQOANA}ANA}O#+|QPOANA}O(XQPOANBSO!'SQPO'#HuO#,RQPO,5?ZOOQOANBUANBUO#,ZQPOANBUO#,`QPOANBXO#,eQPOANBZOOQOAN?hAN?hO#,jQPOANCPO#,qQPO'#IYO#,yQPOANCPO#-OQPOANCPO#-TQPOANCPO#-_QPOANCRO#-fQPOANCRO#-kQPOANCRO#-pQPOANCRO#-zQPOANCSO#.PQPOANCSO(XQPOANCSO#.UQPOANCTO#.ZQPOANCTO(XQPOANCTO#.`QPOANCUO#.eQPOANCVO#.jQPOG25xO(XQPOG25xOOQO7+'k7+'kO!$YQPO7+'kOOQO1G3t1G3tOOQO1G3v1G3vO(XQPOG26{OOQO1G3w1G3wO#.qQPO1G3wOOQO1G3x1G3xO(XQPO1G3xO#+mQPO,5>_OOQO,5>_,5>_OOQO-E;q-E;qOOQOG27iG27iO#.vQPO'#H]O#.{QPO'#InO#/TQPOG27nO!'SQPO,5>aOOQO,5>a,5>aOOQO-E;s-E;sO(XQPOG27pO#/YQPOG27sO#/_QPOG27uO%mQPOG28kO#/dQPOG28kO#/iQPO'#HkO#/pQPO,5>tOOQOG28kG28kO#/xQPOG28kO#/}QPOG28kO&qQPOG28mO#0UQPOG28mOOQOG28mG28mO#0ZQPOG28mO#0`QPOG28mOOQOG28nG28nO%mQPOG28nO#0gQPOG28nOOQOG28oG28oO&qQPOG28oO#0lQPOG28oOOQOG28pG28pOOQOG28qG28qOOQOLD+dLD+dOYQPOLD+dOOQO<<KV<<KVO#0qQPOLD,gOOQO7+)c7+)cOOQO7+)d7+)dOOQO1G3y1G3yO(XQPO,5=wO!'SQPO'#HtO#0vQPO,5?YOOQOLD-YLD-YOOQO1G3{1G3{O#1OQPOLD-[O#1TQPOLD-_O#1TQPOLD-aO#1YQPOLD.VO#1_QPOLD.VO#/iQPO,5>VOOQO,5>V,5>VOOQO-E;i-E;iO#1dQPOLD.VO#1iQPOLD.VO#1pQPOLD.XO#1uQPOLD.XO#1zQPOLD.XO#2PQPOLD.XO#2WQPOLD.YO#2]QPOLD.YO#2bQPOLD.ZO#2gQPOLD.ZO#2lQPO!$( OO#2sQPO!$(!RO#2xQPO1G3cO!'SQPO,5>`OOQO,5>`,5>`OOQO-E;r-E;rOOQO!$(!v!$(!vO#3TQPO'#HbO#3`QPO'#IpO#3hQPO!$(!yO#3mQPO!$(!{OOQO!$(#q!$(#qO#3rQPO!$(#qOOQO1G3q1G3qO%mQPO!$(#qO#3wQPO!$(#qOOQO!$(#s!$(#sO#3|QPO!$(#sO&qQPO!$(#sO#4RQPO!$(#sOOQO!$(#t!$(#tO%mQPO!$(#tOOQO!$(#u!$(#uO&qQPO!$(#uOOQO!)9Dj!)9DjO#4WQPO!)9EmO(XQPO7+(}OOQO1G3z1G3zO(XQPO,5=|O#4]QPO'#HvO#4eQPO,5?[OOQO!)9Fe!)9FeOOQO!)9Fg!)9FgO#4mQPO!)9G]O#4rQPO!)9G]O#4wQPO!)9G]O#4|QPO!)9G_O#5RQPO!)9G_O#5WQPO!)9G_O#5]QPO!)9G`O#5bQPO!)9GaO(XQPO!.K;XOOQO<<Li<<LiOOQO1G3h1G3hO#4]QPO,5>bOOQO,5>b,5>bOOQO-E;t-E;tO%mQPO!.K<wOOQO!.K<w!.K<wO#5gQPO!.K<wO&qQPO!.K<yOOQO!.K<y!.K<yO#5lQPO!.K<yOOQO!.K<z!.K<zOOQO!.K<{!.K<{O#5qQPO!4/0sOOQO1G3|1G3|O#5vQPO!4/2cO#5{QPO!4/2cO#6QQPO!4/2eO#6VQPO!4/2eO#6[QPO!9A&_OOQO!9A'}!9A'}O%mQPO!9A'}OOQO!9A(P!9A(PO&qQPO!9A(POOQO!?$Iy!?$IyO#6aQPO!?$KiO#6fQPO!?$KkOOQO!D6AT!D6ATOOQO!D6AV!D6AV",
-     stateData: "#6k~O&mOS#aOS~OPQOQPORTOSUOTROUSOVVOWWOXXOYYOZZObcOpfOqiOrjOskOt]Ox[O|`O!VgO!WhO!XlO!YmO!ZnO![oO!]pO!^qO!_rO!`sO!atO!buO!cvO!dwO!exO!fyO!gzO!h{O!i|O!j}O!k!OO!l!PO!m!QO!n!UO!o!VO!p!WO!q!XO!r!YO!s!ZO!t![O!u!]O!v!^O!w!`O!x!_O!yaO!|dO!}eO#O!RO#P!SO#Q!TO#R!aO#S!bO#T!dO#U!eO#ebO&X!gO&Y!hO&z!gO~Og!nOi!mOj!mOk!oOl!pOm!pO#V!lO#W!lO#X!lO#Y!lO#Z!lO#[!lO#]!lO#^!lO#_!lO#`!lO~Of!xOg!{Oh!|On!zO#V!lO#W!lO#X!lO#Y!lO#Z!lO#[!lO#]!lO#^!lO#_!lO#`!lO#e!sO#i!vO#o!uO#z#OO#{!}O&q!tO&u!tO&v!tO~Of!xO#e!sO#i!vO#o!uO&q!tO&u!tO&v!tO~O#e#bO~Ov#fOw#dO~PYOv#fOw#dO&X'SX&k'SX&z'SX~O!U#lO#e!sO#i#kO#o!uO&q!tO&u!tO&v!tO~Ob#tOc#qOd#rOe#sO#i#uO$Z#vO&X#wO~O_#yO#{#|O%O#zO~P(XO#e$QO~O#e$RO~O#e!sO#o!uO&q!tO&u!tO&v!tO~O#e$cO~O$Z#vO~O&X!gO&z!gO~O#e${O~O#e$|O~O#e$}O~O#i%OO#p%PO#q%PO#r%PO#s%PO#t%PO#u%PO#v%PO#w%PO#j&rX~O#|&rX&X&rX&k&rX&z&rX#f&rX!{&rX!V&rX!W&rX$Z&rX$b&rX$c&rX$d&rX$e&rX$f&rXy&rX$P&rXP&rXQ&rXR&rXS&rXT&rXU&rXV&rXW&rXX&rXY&rXZ&rXb&rXp&rXq&rXr&rXs&rXt&rXx&rXz&rX|&rX!X&rX!Y&rX!Z&rX![&rX!]&rX!^&rX!_&rX!`&rX!a&rX!b&rX!c&rX!d&rX!e&rX!f&rX!g&rX!h&rX!i&rX!j&rX!k&rX!l&rX!m&rX!n&rX!o&rX!p&rX!q&rX!r&rX!s&rX!t&rX!u&rX!v&rX!w&rX!x&rX!y&rX!|&rX!}&rX#O&rX#P&rX#Q&rX#R&rX#S&rX#T&rX#U&rX#e&rX&Y&rX$O&rX~P+}O#l%SO#i&tX#p&tX#q&tX#r&tX#s&tX#t&tX#u&tX#v&tX#w&tX#|&tX~O&X&tX&k&tX&z&tX#f&tX$Z&tX$b&tX$c&tX$d&tX$e&tX$f&tX!{&tX!V&tX!W&tX#j&tXy&tX}&tX!R&tX!S&tX!T&tXP&tXQ&tXR&tXS&tXT&tXU&tXV&tXW&tXX&tXY&tXZ&tXb&tXp&tXq&tXr&tXs&tXt&tXx&tX|&tX!X&tX!Y&tX!Z&tX![&tX!]&tX!^&tX!_&tX!`&tX!a&tX!b&tX!c&tX!d&tX!e&tX!f&tX!g&tX!h&tX!i&tX!j&tX!k&tX!l&tX!m&tX!n&tX!o&tX!p&tX!q&tX!r&tX!s&tX!t&tX!u&tX!v&tX!w&tX!x&tX!y&tX!z&tX!|&tX!}&tX#O&tX#P&tX#Q&tX#R&tX#S&tX#T&tX#U&tX#e&tX&Y&tX$P&tXz&tX$O&tX~P2QO#z%VO~P(XO#z%VO~O#z%XO~P(XO#|%ZO&X&yX&k&yX&z&yX$P&yX~O#f%^O#|%]O~O#f%`O#|%_O~O#|%aO~O#|%bO~O#|%cO~O#|%dO~O#|%eO~O$Z%fO~Ou%gO~PYO#i%OO$Z%lO$b%lO$c%lO$d%lO$e%lO$f%lO~Of!xO~P)bO#i!vO~P*yO!R%qO!S%qO!T%qO}$_XP$_XQ$_XR$_XS$_XT$_XU$_XV$_XW$_XX$_XY$_XZ$_Xb$_Xp$_Xq$_Xr$_Xs$_Xt$_Xx$_X|$_X!V$_X!W$_X!X$_X!Y$_X!Z$_X![$_X!]$_X!^$_X!_$_X!`$_X!a$_X!b$_X!c$_X!d$_X!e$_X!f$_X!g$_X!h$_X!i$_X!j$_X!k$_X!l$_X!m$_X!n$_X!o$_X!p$_X!q$_X!r$_X!s$_X!t$_X!u$_X!v$_X!w$_X!x$_X!y$_X!|$_X!}$_X#O$_X#P$_X#Q$_X#R$_X#S$_X#T$_X#U$_X#e$_X&X$_X&Y$_X&z$_X&k$_X#j$_X~O}%sO~O!{%tO~O[%xO]%xO^%xO_%xO~O#i&sX#p&sX#q&sX#r&sX#s&sX#t&sX#u&sX#v&sX#w&sX#|&sX&X&sX&k&sX&z&sX~O#i&RO~P@jO&q&UO~O#|&VO&X']X&k']X&z']X~O#|&XO~O!V&ZO!W&YO~O#|&[O~O#|&]O~O#|&^O~O#|&_O~O#|&`O~O#|&aO~O#|&bO~O#|&cO~O#|&dO~O#|&eO~O#|&fO~O#|&gO~O#|&hO~O#|&iO~O#|&jO~P:gO#|&lO~O#|&mO~O#|&nO~O#|&oO~O#|&pO~O#|&qO~O#f&rO~O#f&sO&X#da&k#da&z#da#|#da$P#da~O#p%PO#q%PO#r%PO#s%PO#t%PO#u%PO#v%PO#w%PO~O#|#ga&X#ga&k#ga&z#ga#f#ga!{#ga!V#ga!W#ga$Z#ga$b#ga$c#ga$d#ga$e#ga$f#ga#j#gay#ga$P#gaP#gaQ#gaR#gaS#gaT#gaU#gaV#gaW#gaX#gaY#gaZ#gab#gap#gaq#gar#gas#gat#gax#gaz#ga|#ga!X#ga!Y#ga!Z#ga![#ga!]#ga!^#ga!_#ga!`#ga!a#ga!b#ga!c#ga!d#ga!e#ga!f#ga!g#ga!h#ga!i#ga!j#ga!k#ga!l#ga!m#ga!n#ga!o#ga!p#ga!q#ga!r#ga!s#ga!t#ga!u#ga!v#ga!w#ga!x#ga!y#ga!|#ga!}#ga#O#ga#P#ga#Q#ga#R#ga#S#ga#T#ga#U#ga#e#ga&Y#ga$O#ga~PEWO`&wOa&xO~O#j&yO~O#f&{O#|#ya&X#ya&k#ya&z#ya$P#ya~O#f&{O~O&z&}O~P&qO#|%ZO&X&ya&k&ya&z&ya$P&ya~Ou']O~PYOu'^O~PYO$Z%lO$b%lO$c%lO$d%lO$e%lO$f%lO~P+}O#j'`O~O!R%qO!S%qO!T%qO}$_aP$_aQ$_aR$_aS$_aT$_aU$_aV$_aW$_aX$_aY$_aZ$_ab$_ap$_aq$_ar$_as$_at$_ax$_a|$_a!V$_a!W$_a!X$_a!Y$_a!Z$_a![$_a!]$_a!^$_a!_$_a!`$_a!a$_a!b$_a!c$_a!d$_a!e$_a!f$_a!g$_a!h$_a!i$_a!j$_a!k$_a!l$_a!m$_a!n$_a!o$_a!p$_a!q$_a!r$_a!s$_a!t$_a!u$_a!v$_a!w$_a!x$_a!y$_a!|$_a!}$_a#O$_a#P$_a#Q$_a#R$_a#S$_a#T$_a#U$_a#e$_a&X$_a&Y$_a&z$_a&k$_a#j$_a~O!O'dO!P'cO!Q'eO~PYO#e!sO#i!vO#o!uO&q!tO&u!tO&v!tO~P:gO!z$pX!{$pX~PYO!z'qO!{'nO~O#i'sO&X'YX&k'YX&z'YX~O#i%OO&X$yi&k$yi&z$yi~O#i%OO&X$zi&k$zi&z$zi~O#j'tO~O&q'uO~O#i'vO~P@jO#|&VO&X']a&k']a&z']a~O_'yO%O#zO&z&}O~P(XO$O'|O~O#e'}O~O#e(UO~O_(^O#e(]O~O_(aO~P(XO$O(cO~O#|(fO~O$O(jO~P(XO&q(nO~O&q(oO~O#j(pO~O#i%OO#p&[a#q&[a#r&[a#s&[a#t&[a#u&[a#v&[a#w&[a#|&[a&X&[a&k&[a&z&[a#f&[a!{&[a!V&[a!W&[a$Z&[a$b&[a$c&[a$d&[a$e&[a$f&[a#j&[ay&[a$P&[aP&[aQ&[aR&[aS&[aT&[aU&[aV&[aW&[aX&[aY&[aZ&[ab&[ap&[aq&[ar&[as&[at&[ax&[az&[a|&[a!X&[a!Y&[a!Z&[a![&[a!]&[a!^&[a!_&[a!`&[a!a&[a!b&[a!c&[a!d&[a!e&[a!f&[a!g&[a!h&[a!i&[a!j&[a!k&[a!l&[a!m&[a!n&[a!o&[a!p&[a!q&[a!r&[a!s&[a!t&[a!u&[a!v&[a!w&[a!x&[a!y&[a!|&[a!}&[a#O&[a#P&[a#Q&[a#R&[a#S&[a#T&[a#U&[a#e&[a&Y&[a$O&[a~O#f(rO#|#yi&X#yi&k#yi&z#yi$P#yi~O#|(uO~O#|(vO~O#|(wO~O#|(xO~O#|(yO~O#|(zO~O#|({O~O#|(|O~Oy(}O~O#i%OO}$ai!R$ai!S$ai!T$aiP$aiQ$aiR$aiS$aiT$aiU$aiV$aiW$aiX$aiY$aiZ$aib$aip$aiq$air$ais$ait$aix$ai|$ai!V$ai!W$ai!X$ai!Y$ai!Z$ai![$ai!]$ai!^$ai!_$ai!`$ai!a$ai!b$ai!c$ai!d$ai!e$ai!f$ai!g$ai!h$ai!i$ai!j$ai!k$ai!l$ai!m$ai!n$ai!o$ai!p$ai!q$ai!r$ai!s$ai!t$ai!u$ai!v$ai!w$ai!x$ai!y$ai!|$ai!}$ai#O$ai#P$ai#Q$ai#R$ai#S$ai#T$ai#U$ai#e$ai&X$ai&Y$ai&z$ai&k$ai#j$ai~O!Q)PO~PYOy)SO#i%OOP$rXQ$rXR$rXS$rXT$rXU$rXV$rXW$rXX$rXY$rXZ$rXb$rXp$rXq$rXr$rXs$rXt$rXx$rX|$rX!V$rX!W$rX!X$rX!Y$rX!Z$rX![$rX!]$rX!^$rX!_$rX!`$rX!a$rX!b$rX!c$rX!d$rX!e$rX!f$rX!g$rX!h$rX!i$rX!j$rX!k$rX!l$rX!m$rX!n$rX!o$rX!p$rX!q$rX!r$rX!s$rX!t$rX!u$rX!v$rX!w$rX!x$rX!y$rX!z$rX!{$rX!|$rX!}$rX#O$rX#P$rX#Q$rX#R$rX#S$rX#T$rX#U$rX#e$rX#|$rX&X$rX&Y$rX&z$rX~O#|)UOP'WXQ'WXR'WXS'WXT'WXU'WXV'WXW'WXX'WXY'WXZ'WXb'WXp'WXq'WXr'WXs'WXt'WXx'WX|'WX!V'WX!W'WX!X'WX!Y'WX!Z'WX!['WX!]'WX!^'WX!_'WX!`'WX!a'WX!b'WX!c'WX!d'WX!e'WX!f'WX!g'WX!h'WX!i'WX!j'WX!k'WX!l'WX!m'WX!n'WX!o'WX!p'WX!q'WX!r'WX!s'WX!t'WX!u'WX!v'WX!w'WX!x'WX!y'WX!z'WX!{'WX!|'WX!}'WX#O'WX#P'WX#Q'WX#R'WX#S'WX#T'WX#U'WX#e'WX&X'WX&Y'WX&z'WX~O!z$pa!{$pa~PYO!O)WO#e!sO#i!vO#o!uO&q!tO&u!tO&v!tO~P:gO!z$uX~PYO!z)YO~O&q)ZO~O#j)[O~O&q)]O~O#|&VO&X']i&k']i&z']i~O_)^O%O#zO&z&}O~P(XO#|)aO&X'^X&k'^X&z'^X$P'^X~O#|)cO~O#|)dO~O#|)eO~O#|)fO~O#|)gO~O#|)hO~O#|)iO&X'_X&k'_X&z'_X~O#e)kO~O#|)lO&X'`X&k'`X&z'`X~O#{)pO~P*yO#|)qO~O#|)rO~O#|)tO~O#|)wO~O#|)xO~O#|)yO~O#f)zO&X#dq&k#dq&z#dq#|#dq$P#dq~Of!xO#i!vO#o!uO&q!tO&u!tO&v!tO~O#e)|O$O)}O~P!C[O#e*QO$O*RO~P!C[O$O*UO~P(XO$O*WO~P(XO$O*YO~O$O*ZO~O}*]O~O!Q*^O~PYO#i%OOP$saQ$saR$saS$saT$saU$saV$saW$saX$saY$saZ$sab$sap$saq$sar$sas$sat$sax$sa|$sa!V$sa!W$sa!X$sa!Y$sa!Z$sa![$sa!]$sa!^$sa!_$sa!`$sa!a$sa!b$sa!c$sa!d$sa!e$sa!f$sa!g$sa!h$sa!i$sa!j$sa!k$sa!l$sa!m$sa!n$sa!o$sa!p$sa!q$sa!r$sa!s$sa!t$sa!u$sa!v$sa!w$sa!x$sa!y$sa!z$sa!{$sa!|$sa!}$sa#O$sa#P$sa#Q$sa#R$sa#S$sa#T$sa#U$sa#e$sa#|$sa&X$sa&Y$sa&z$sa~O#e!sO#i!vO#o!uO&q!tO&u!tO&v!tO&z&}O~P:gO#|)UOP'WaQ'WaR'WaS'WaT'WaU'WaV'WaW'WaX'WaY'WaZ'Wab'Wap'Waq'War'Was'Wat'Wax'Wa|'Wa!V'Wa!W'Wa!X'Wa!Y'Wa!Z'Wa!['Wa!]'Wa!^'Wa!_'Wa!`'Wa!a'Wa!b'Wa!c'Wa!d'Wa!e'Wa!f'Wa!g'Wa!h'Wa!i'Wa!j'Wa!k'Wa!l'Wa!m'Wa!n'Wa!o'Wa!p'Wa!q'Wa!r'Wa!s'Wa!t'Wa!u'Wa!v'Wa!w'Wa!x'Wa!y'Wa!z'Wa!{'Wa!|'Wa!}'Wa#O'Wa#P'Wa#Q'Wa#R'Wa#S'Wa#T'Wa#U'Wa#e'Wa&X'Wa&Y'Wa&z'Wa~O!z$ua~PYO#j*cO~O#j*dO~O$P*fO~O#e*hO&z&}O~O#|)aO&X'^a&k'^a&z'^a$P'^a~O#e*kO~O#e*mO~O#e*oO~O_*rO#e*qO&z&}O~O#|)iO&X'_a&k'_a&z'_a~O_*wO&z&}O~P(XO#|)lO&X'`a&k'`a&z'`a~O#|*zO$P'aX~O$P*|O~O#e*}O~O#e+OO~O#|+PO~O$O+QO~O#|+RO$P'cX~O$P+TO~O&q+XO~O#|+YO~P2QO#|+]O~O#|+^O~O#|+_O~P2QO#|+aO~O#|+bO~O#f+eO#|+dO~O#f+hO#|+gO~Oz+lO~PYO#i%OOP$tiQ$tiR$tiS$tiT$tiU$tiV$tiW$tiX$tiY$tiZ$tib$tip$tiq$tir$tis$tit$tix$ti|$ti!V$ti!W$ti!X$ti!Y$ti!Z$ti![$ti!]$ti!^$ti!_$ti!`$ti!a$ti!b$ti!c$ti!d$ti!e$ti!f$ti!g$ti!h$ti!i$ti!j$ti!k$ti!l$ti!m$ti!n$ti!o$ti!p$ti!q$ti!r$ti!s$ti!t$ti!u$ti!v$ti!w$ti!x$ti!y$ti!z$ti!{$ti!|$ti!}$ti#O$ti#P$ti#Q$ti#R$ti#S$ti#T$ti#U$ti#e$ti#|$ti&X$ti&Y$ti&z$ti~O#e+pO&z&}O~O#|+qO~O_+sO#e+rO&z&}O~O#e+rO~O#|)iO&X'_i&k'_i&z'_i~O_+uO&z&}O~P(XO#|)lO&X'`i&k'`i&z'`i~O&z&}O~P*yO#|*zO$P'aa~O#e+yO~O#|+RO$P'ca~O$O,QO~O#|,RO~O#|,SO~O$O,TO~P(XO#|,VO$P&|X~O$P,XO~O#e,YO~O#e,ZO$O,TO~P!C[O$O,[O~P(XO$P,^O~O#e,_O~O#e,`O$O,[O~P!C[O$P,aO~O$O,bO~O$P,dO~O$O,eO~O$P,gO~O$P,hO~O{,iO~PYO#e,mO~O#f,pO~O#|,qO$P'bX~O$P,sO~O$O,vO~O$O,wO~O#|,yO~O&z&}O~P%mO#|,VO$P&|a~O#|,}O~O#|-OO~P2QO#|-QO~O#|-RO~O#|-SO~P2QO#|-UO~O#|-WO~O#|-YO~O#|,qO$P'ba~O$P-_O~O#e-`O~O$P-dO~O#e-eO~O$O-gO~O$O-gO~P(XO$P-iO~O#e-jO~O$O-kO~O$O-kO~P(XO$P-mO~O$O-nO~O$P-oO~O$O-pO~O{-qO~PYO#e-rO~O#f-sO#|&Pi$P&Pi~O#f-uO#|&UX$P&UX~O#|-vO$P'dX~O$P-xO~O$P-yO~O#|-zO~O#|-|O~O#|-}O~O#|.PO~O#|.SO~O#e-`O&z&}O~O#|-vO$P'da~O$O.YO~O$P.ZO~O#e.[O~O$O.]O~O$P.^O~O#e._O~O$P.`O~O$P.aO~O#|.eO~O#|.gO~O#|.hO~O$P.iO~O$O.jO~O$P.kO~O$O.lO~O#e.mO~O$P.pO~O$P.qO~O",
-     goto: "!#r'fPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP'g(PPP(e+lPP/TP/T/TPPPPPPPPP'g2qPPP'gPP'g'g'g'g'g'g'g'g'gP3T3m4V4]4l4tPPPPP4l3T3T5P3T'g5V5V'g5]5a5e5e5e5k5n'g5q'g'g'g5t5tP'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g'g6O'g'g'g'g'g'g6X'g'g6b'g6z'g'gPP7U8U8]8c9c9i9o9u9{:V:]:g:q:w:};TPPP;Z;s<]P<yEYITPP+lMPMUPMtMwNdNgNjNmNs'gNy! T! b! n! r! |!!P!!S!!Y!!^!!g!!p!!s!!v!!y!#P!#V}!fO]!k#c#e#g%i%k%s%u'd'g'm'p)Q)X*[*]+k+n,j-XQ!qPb+Z)}*U*Y,T,b-g-n.Y.jQ,{,VR-f,z'Z!xQRSTUVWXYZacdelmnoqrstuvwxyz|}!O!P!Q!T!U!V!W!X!Y!Z![!]!^!_!`!a!b!d!e!p!v!y!{!|#O#k#t#u#v#y%O%V%X%Z%]%^%_%`%a%b%c%d%e%f&V&[&^&_&a&b&c&d&e&f&h&n&o&p&q&{'O'x'y(a(j(r(u(v(w(x(y(z(})^)c)e)g)l)w)x)y*R*W*Z*u*w+Q+R+Y+^+_+b+e+h+l+q+u+},Q,[,e,p,q-O-S-[-k-p-s-u.S.].l'{!wQRSTUVWXYZ`acdelmnoqrstuvwxyz|}!O!P!Q!T!U!V!W!X!Y!Z![!]!^!_!`!a!b!d!e!p!v!y!{!|#O#d#f#k#l#r#s#t#u#v#y%O%Q%V%X%Z%]%^%_%`%a%b%c%d%e%f%m%q%t&V&[&^&_&a&b&c&d&e&f&h&n&o&p&q&{'O'c'i'n'x'y(a(j(r(u(v(w(x(y(z(})S)U)^)c)e)g)l)w)x)y*R*W*Z*`*u*w+Q+R+Y+^+_+b+e+h+l+q+u+},Q,[,e,p,q-O-S-[-k-p-s-u.S.].l(V!uQRSTUVWXYZ`acdelmnopqrstuvwxyz|}!O!P!Q!T!U!V!W!X!Y!Z![!]!^!_!`!a!b!d!e!p!v!y!{!|#O#d#f#k#l#r#s#t#u#v#y%O%Q%V%X%Z%]%^%_%`%a%b%c%d%e%f%m%q%t&V&[&]&^&_&a&b&c&d&e&f&h&n&o&p&q&{'O'c'i'n'x'y(a(c(j(r(u(v(w(x(y(z(})S)U)^)c)e)g)l)w)x)y*R*W*Z*`*u*w*z+Q+R+Y+^+_+b+e+h+l+q+u+v+},Q,[,e,p,q-O-S-[-k-p-s-u.S.].ld#PQ*R*W*Z,[,e-k-p.].lQ'P%ZR(t'O}_O]!k#c#e#g%i%k%s%u'd'g'm'p)Q)X*[*]+k+n,j-X}^O]!k#c#e#g%i%k%s%u'd'g'm'p)Q)X*[*]+k+n,j-XQ#e]R#h^Q#o`Q%h#dQ%j#fQ%o#kR)O'c]#m`#d#f#k%q'c[#m`#d#f#k%q'cR%p#lQ#g]R#i^X'e%s'g*]+nT%v#p%wT%u#p%wX'j%t'n)U*`R'r%wR'p%wR%z#qS#{c#tQ'z&VR)_'xQ(d&iQ(e&jR)s(fQ+{+QQ-],qR-t-[}!cO]!k#c#e#g%i%k%s%u'd'g'm'p)Q)X*[*]+k+n,j-XS-a,v,wQ.W-vR.c.VQ!kOQ#c]f$z!k#c%i%k'g'm)Q)X+k+n-XQ%i#eQ%k#gQ'g%sQ'm%uQ)Q'dQ)X'pQ+k*[Q+n*]R-X,jS%R!r%nR&v%RQ%[#PR'Q%[Q'O%ZQ'x&Vf(s'O'x*`*g*p*u+v+},z-[.VQ*`)UQ*g)aQ*p)iQ*u)lQ+v*zQ+}+RQ,z,VQ-[,qR.V-vQ,W+ZR,|,WQ%r#nR'b%rQ%w#pR'o%wQ)V'kR*b)VQ&W#{Q'w&TT'{&W'wQ)b'}R*i)bQ)j(]S*s)j*tR*t)kQ)m(`S*x)m*yR*y)nQ*{)oR+x*{Q,r+{R-^,rQ+S)uR,P+SQ-w-aR.X-w}!jO]!k#c#e#g%i%k%s%u'd'g'm'p)Q)X*[*]+k+n,j-X}!iO]!k#c#e#g%i%k%s%u'd'g'm'p)Q)X*[*]+k+n,j-Xh!mP)}*U*Y,T,V,b,z-g-n.Y.ji!yQ%Z'O*R*W*Z,[,e-k-p.].lh!}Q%Z'O*R*W*Z,[,e-k-p.].lQ#RRQ#TSQ#VTQ#XUS#ZVXS#]WYQ#aZQ#paS#{c#tQ$OdQ$PeQ$SlQ$TmQ$UnQ$VoQ$XqQ$YrQ$ZsQ$[tQ$]uQ$^vQ$_wQ$`xQ$ayQ$bzQ$d|Q$e}Q$f!OQ$g!PQ$h!QQ$i!TQ$j!UQ$k!VQ$l!WQ$m!XQ$n!YQ$o!ZQ$p![Q$q!]Q$r!^Q$s!_Q$t!`Q$u!aQ$v!bQ$w!dQ$x!eQ${!pS%T!v#kS%U!y#OQ%W!{Q%Y!|Q&P#uQ&Q#vQ&T#yQ&t%OQ&z%VQ&|%XQ'R%]Q'S%^Q'T%_Q'U%`Q'V%aQ'W%bQ'X%cQ'Y%dQ'Z%eQ'[%fQ'z&VQ(Q&[Q(S&^Q(T&_Q(V&aQ(W&bQ(X&cQ(Y&dQ(Z&eQ([&fQ(`&hQ(i&nQ(k&oQ(l&pQ(m&qQ(q&{S)_'x'yQ)n(aS)u(j,QQ){(rQ*O(uQ*P(vQ*S(wQ*T(xQ*V(yQ*X(zQ*[(}Q*e)^Q*j)cQ*l)eQ*n)gQ*v)lQ+U)wQ+V)xQ+W)yS+t*u*wU+z+Q,q-[Q,O+RS,U+Y+^S,]+_+bQ,c+eQ,f+hQ,j+lQ,l+qQ,n+uQ,t+}Q-Z,pQ-h-OQ-l-SQ.T-sQ.U-uR.b.S'W!rQRSTUVWXYZacdelmnoqrstuvwxyz|}!O!P!Q!T!U!V!W!X!Y!Z![!]!^!_!`!a!b!d!e!p!v!y!{!|#O#t#u#v#y%O%V%X%Z%]%^%_%`%a%b%c%d%e%f&V&[&^&_&a&b&c&d&e&f&h&n&o&p&q&{'O'x'y(a(j(r(u(v(w(x(y(z(})^)c)e)g)l)w)x)y*R*W*Z*u*w+Q+R+Y+^+_+b+e+h+l+q+u+},Q,[,e,p,q-O-S-[-k-p-s-u.S.].l[#j`#d#f#l%q'cQ%n#kQ%|#rQ%}#sQ&u%QQ'_%mW'h%t'n)U*`Q)T'iR*_)S'l!wQRSTUVWXYZ`adelmnoqrstuvwxyz|}!O!P!Q!T!U!V!W!X!Y!Z![!]!^!_!`!a!b!d!e!p!v!y!{!|#O#d#f#k#l#r#s#u#v%O%Q%V%X%Z%]%^%_%`%a%b%c%d%e%f%m%q%t&[&^&_&a&b&c&d&e&f&h&n&o&p&q&{'O'c'i'n(a(j(r(u(v(w(x(y(z(})S)U)c)e)g)l)w)x)y*R*W*Z*`*u*w+Q+R+Y+^+_+b+e+h+l+q+u+},Q,[,e,p,q-O-S-[-k-p-s-u.S.].lW#xc#t&V'xQ$WpU&S#y'y)^Q(R&]Q)o(cQ+w*zR,o+vV%Q!r%R%nQ#QQQ+`*RQ+f*WQ+j*ZQ-P,[Q-V,eQ.O-kQ.R-pQ.f.]R.o.lR#SRQ+[)}Q+c*UQ+i*YQ,x,TQ-T,bQ-{-gQ.Q-nQ.d.YR.n.jR#USR#WTR#YUQ#[VR#_XQ#^WR#`YY#n`#d#f#k'cR'a%qS%m#j%nQ&k$pX'i%t'n)U*`Q'f%sQ)R'gQ+m*]R,k+nT'l%t'nS'k%t'nQ*a)UR+o*`R%{#qR%y#qQ#}cR&O#tT#|c#tQ(O&YQ(P&ZR)`'|Q(_&gQ(g&lR(h&mR(b&hR)p(cR+|+QQ)v(jR,u,QQ-b,vR-c,w|!hO]!k#c#e#g%i%k%s%u'd'g'm'p)Q)X*[*]+k+n,j-XR$y!i",
-     nodeNames: "⚠ DebugKW DebuginKW I2CInKW I2COutKW SerinKW SeroutKW OwinKW OwoutKW LcdinKW LcdoutKW LcdcmdKW BitKW NibKW ByteKW WordKW LowByteKW HighByteKW DataKW VarKW PinKW ConKW CrKW StrKW RepKW NumKW SNumKW WaitStrKW SkipKW SpstrKW AscKW DoneKW ReturnKW EndKW ExitKW StopKW DoKW LoopKW WhileKW UntilKW ForKW ToKW StepKW NextKW IfKW ThenKW ElseKW ElseifKW EndifKW AndKW OrKW XorKW NotKW GotoKW GosubKW PauseKW NapKW SleepKW ButtonKW RCTimeKW PollinKW PolloutKW PollrunKW PollwaitKW PollmodeKW CompareKW HighKW LowKW ToggleKW PwmKW RandomKW InputKW OutputKW ReverseKW ConfigPinKW CountKW FreqoutKW PulsoutKW PulsinKW ReadKW WriteKW LookupKW LookdownKW GetKW PutKW RunKW StoreKW SelectKW EndselectKW CaseKW BranchKW OnKW AuxioKW MainioKW IotermKW XOutKW DTMFOutKW ShiftInKW ShiftOutKW DecKW SDecKW HexKW SHexKW IHexKW ISHexKW BinKW SBinKW IBinKW ISBinKW Comment Program Debugin InputFormatExpr Identifier \\ Arith ArrayIndex ( ) LowByte . HighByte Number Char Plus Minus Mult Divide Mult100 Divide100 Shl Shr Debug OutputFormatExpr ? String , Serin [ ] Serout I2CIn I2COut Owin Owout Lcdin Lcdout Lcdcmd For = LoopUntil Loop Until Logical Not Condition > < >= <= <> Paren_Logical UntilLoop LoopWhile While WhileLoop If Elseif Else Select Case CaseLabel ValuePattern ComparisonPattern RangePattern CaseElse CaseElseLabel VarDecl ArrayType PinDecl ConDecl DataDecl DataAlloc DataLoc @ Branch OnGosub OnGoto Return Goto Gosub End Exit Stop Pause Nap Sleep Button RCTime Pollin Pollout Pollrun Pollwait Pollmode Compare High Low Toggle PWM Random Input Output Reverse Configpin Count Auxio Mainio Ioterm Freqout Pulsout Pulsin Read Write Lookup LookupTarget Lookdown Get Put Store Run XOut XOutParam DTMFOut Assignment ArrayIndex ShiftIn ShiftArg ShiftOut Label : Preprocessor",
-     maxTerm: 297,
+     states: "!EpQYQPOOO%mQPO'#EoO&qQPO'#FVO(XQPO'#F[O(XQPO'#F_O(XQPO'#F`O(XQPO'#FaO(XQPO'#FbO(XQPO'#FcO(XQPO'#FdO(XQPO'#FeO(XQPO'#FfO(pQPO'#FhOYQPO'#FgO(uQPO'#FwO)PQPO'#IfOYQPO'#FvOYQPO'#FzOOQO'#If'#IfO)bQPO'#F|O(XQPO'#GQO)yQPO'#GZO*bQPO'#HkO*sQPO'#G_O(XQPO'#GdO(XQPO'#GeOOQO'#Gg'#GgO+QQPO'#GhO+VQPO'#GiOOQO'#Gj'#GjOOQO'#Gk'#GkOOQO'#Gl'#GlO(XQPO'#GmO(XQPO'#GnO(XQPO'#GoO(XQPO'#GpO+[QPO'#GqO(XQPO'#GrO(XQPO'#GsO(XQPO'#GtO(XQPO'#GuO(XQPO'#GvO(XQPO'#GwO(XQPO'#GxO(XQPO'#GyO(XQPO'#GzO(XQPO'#G{O+mQPO'#G|O(XQPO'#G}O(XQPO'#HOO(XQPO'#HPO(XQPO'#HQO(XQPO'#HROOQO'#HS'#HSOOQO'#HT'#HTO(XQPO'#HUO(XQPO'#HVO(XQPO'#HWO(XQPO'#HXO(XQPO'#HYO(XQPO'#HZO(XQPO'#H[O(XQPO'#H^O(XQPO'#H_O(XQPO'#H`O(XQPO'#HaO(XQPO'#HbO(XQPO'#HcO(XQPO'#HeO+rQPO'#HfO(XQPO'#HhO(XQPO'#HjOOQO'#IS'#ISOOQO'#Iu'#IuOOQO'#IR'#IRQ+wQPO'#IROOQO'#Hn'#HnQYQPOOOOQO'#IT'#ITO,PQPO'#EpO,UQPO'#EpO,ZQPO'#EpO(XQPO'#EpOOQO,5;Z,5;ZO-QQPO'#IUO3WQPO'#IWOOQO'#E{'#E{OOQO'#IW'#IWO(XQPO'#IZOOQO'#IV'#IVOOQO'#IU'#IUO8xQPO'#FWO9PQPO'#FWO9UQPO'#FWO(XQPO'#FWOOQO'#FW'#FWO(XQPO'#FWO9]QPO'#I]OOQO,5;q,5;qO9nQPO'#I_OOQO,5;v,5;vO9vQPO'#IaOOQO,5;y,5;yO:OQPO'#IbOOQO,5;z,5;zO:TQPO'#IcOOQO,5;{,5;{O:YQPO'#IdOOQO,5;|,5;|O:_QPO'#IeOOQO,5;},5;}OOQO,5<O,5<OOOQO,5<P,5<PO:dQPO,5<QO:iQPO,5<SO:nQPO,5<RO:uQPO,5<VO)bQPO'#FlOOQO,5<c,5<cO)bQPO'#FyOOQO,5<g,5<gOOQO,5<U,5<UOOQO,5<d,5<dO:|QPO,5<bO;TQPO,5<fO;[QPO'#FoO;sQPO'#IZO;zQPO'#FnOOQO'#Ig'#IgO<RQPO'#FmO@xQPO,5<hO@}QPO,5<lO(XQPO,5>RO(XQPO,5>QOASQPO,5<tO;zQPO,5<wO;zQPO,5<xO*sQPO,5<yOOQO,5>V,5>VOB]QPO'#IVO(XQPO'#ImOBdQPO'#GbOBiQPO'#ImOOQO'#G`'#G`OOQO,5<y,5<yOBwQPO,5=OOB|QPO,5=POOQO,5=S,5=SOOQO,5=T,5=TOOQO,5=X,5=XOOQO,5=Y,5=YOOQO,5=Z,5=ZOCUQPO,5=[OCZQPO,5=]OC`QPO,5=^OCeQPO,5=_OOQO,5=`,5=`OOQO,5=a,5=aOOQO,5=b,5=bOCjQPO,5=cOOQO,5=d,5=dOOQO,5=e,5=eOOQO,5=f,5=fOCoQPO,5=gOOQO,5=h,5=hOOQO,5=i,5=iOOQO,5=j,5=jOOQO,5=k,5=kOCtQPO,5=lOCyQPO,5=mOOQO,5=p,5=pODOQPO,5=qODTQPO,5=rODYQPO,5=sOD_QPO,5=tODdQPO,5=uODiQPO,5=vODnQPO,5=xODuQPO,5=yODzQPO,5=zOOQO,5={,5={OOQO,5=|,5=|OEPQPO,5=}OEUQPO,5>POEZQPO,5>SOE`QPO,5>UOOQO,5>m,5>mOOQO-E;l-E;lOOQO,5;[,5;[OEeQPO,5;[OEjQPO,5;[O(XQPO,5;aOOQO'#I['#I[O;zQPO'#HoOFjQPO,5;`OLOQPO,5;dOLWQPO,5>uOOQO,5;r,5;rO(XQPO,5;rOL]QPO,5;rO(XQPO,5;rOLqQPO,5;rOLvQPO'#HpOL}QPO,5>wO(XQPO,5>yO(XQPO,5>yO(XQPO,5>{O(XQPO,5>{O(XQPO,5>|O(XQPO,5>}O(XQPO,5?OO(XQPO,5?PO(XQPO1G1lO(XQPO1G1nOOQO1G1m1G1mOOQO1G1q1G1qOOQO,5<W,5<WOOQO,5<e,5<eOOQO1G1|1G1|OOQO1G2Q1G2QOOQO'#Ih'#IhO;zQPO,5<ZOM`QPO'#IUOMvQPO,5<aOOQO,5<Y,5<YO)bQPO'#HsOM{QPO,5<XO!$rQPO1G2SO!%PQPO'#GSO!%gQPO'#GROOQO'#Ht'#HtO!%qQPO1G2WO!%yQPO1G3mOOQO1G3l1G3lOOQO'#Il'#IlO!&OQPO'#IkOOQO'#Ik'#IkOOQO1G2`1G2`O!&^QPO1G2cO!&lQPO1G2dOOQO1G2e1G2eO!&zQPO,5<{O!'PQPO,5<{O!'WQPO,5?XOOQO,5<|,5<|O!'fQPO'#HvO!'WQPO,5?XO!'sQPO1G2jO!'xQPO1G2kO!'xQPO1G2lO(XQPO1G2vO+[QPO1G2wO(XQPO1G2xO(XQPO1G2yO!'}QPO1G2}O(XQPO1G3RO(XQPO1G3WO(XQPO1G3XO(XQPO1G3]O(XQPO1G3^O(XQPO1G3_O!(SQPO1G3`O!([QPO1G3aO!(cQPO1G3bO!(cQPO1G3dO!(hQPO1G3dO!(SQPO1G3eO!(SQPO1G3fO(XQPO1G3iO!(mQPO1G3kO(XQPO1G3nO(XQPO1G3pO!(tQPO1G0vO!(yQPO1G0vO!)OQPO1G0{O!)TQPO,5>ZOOQO-E;m-E;mOOQO1G1O1G1OOOQO1G1Q1G1QOOQO1G4a1G4aOOQO1G1^1G1^O(XQPO1G1^O!/SQPO1G1^OOQO'#Hq'#HqOLvQPO,5>[OOQO,5>[,5>[OOQO-E;n-E;nO!/hQPO1G4eO!/mQPO1G4eO!/rQPO1G4gO!/wQPO1G4gO!/|QPO1G4hO!0RQPO1G4iO!0WQPO1G4jO!0]QPO1G4kOOQO7+'W7+'WO!0bQPO7+'YO!0gQPO1G1uOOQO1G1{1G1{OOQO,5>_,5>_OOQO-E;q-E;qO)bQPO'#GOO!5aQPO'#GPOOQO'#F}'#F}OOQO7+'n7+'nO!$rQPO7+'nO!5hQPO'#GTO;zQPO'#GUOOQO'#Ij'#IjO!:[QPO'#IiOOQO,5<n,5<nO!>xQPO,5<mO!?SQPO'#GSOOQO-E;r-E;rO!?mQPO'#GWOOQO7+'r7+'rO!?tQPO7+'rOOQO7+)X7+)XO!?yQPO,5<vO!@OQPO1G2gO!@TQPO1G2gO!@YQPO1G4sO!@hQPO,5>bO(XQPO,5>bOOQO,5>b,5>bOOQO-E;t-E;tO!'xQPO7+(UO!@uQPO'#InOOQO7+(V7+(VOOQO7+(W7+(WO!AWQPO7+(bO!A]QPO7+(cOOQO7+(d7+(dOOQO7+(e7+(eOOQO7+(i7+(iO!AbQPO7+(mOOQO7+(r7+(rO!AgQPO7+(sO!AlQPO7+(wOOQO7+(x7+(xO!AqQPO7+(yO!AvQPO'#IoO!BUQPO'#IoOOQO7+(z7+(zO!BZQPO'#IpO(XQPO'#IpOOQO7+({7+({O!BiQPO'#H]O!BpQPO7+(|O!BuQPO7+)OO!(cQPO7+)OOOQO7+)P7+)POOQO7+)Q7+)QO!BzQPO7+)TO(XQPO7+)VO!CPQPO7+)VO!CUQPO7+)YO!CZQPO7+)[O!C`QPO7+&bOOQO7+&b7+&bOOQO7+&g7+&gOOQO7+&x7+&xO(XQPO7+&xOOQO-E;o-E;oOOQO1G3v1G3vO!DYQPO7+*PO(XQPO7+*PO!DdQPO7+*RO(XQPO7+*RO!DnQPO7+*SO!DuQPO7+*TO!D|QPO7+*UO!ERQPO7+*VO(XQPO<<JtO!EWQPO,5<jOOQO,5<k,5<kO!E]QPO,5<kOOQO<<KY<<KYO;zQPO,5<qO!EdQPO,5<pO!JTQPO'#HuO!JnQPO,5?TOOQO,5<s,5<sO# [QPO,5<rOOQO<<K^<<K^O# cQPO1G2bOOQO7+(R7+(RO# hQPO7+(RO(XQPO1G3|OOQO1G3|1G3|O# mQPO<<KpO# rQPO'#HwO# zQPO,5?YO(XQPO<<K|O#!]QPO<<K}O(XQPO<<LXO#!bQPO<<L_O(XQPO<<LcO#!gQPO<<LeO#!lQPO'#HxO#!wQPO,5?ZO#!wQPO,5?ZO##VQPO'#HyO##aQPO,5?[O##aQPO,5?[O##oQPO'#IqO##wQPO,5=wO##|QPO<<LhO#$RQPO<<LjO#$WQPO<<LjO#$]QPO<<LoO#$bQPO'#IsO#$jQPO<<LqO(XQPO<<LqO(XQPO<<LtO(XQPO<<LvO#$oQPO<<I|OOQO<<Jd<<JdO#$tQPO<<MkO%mQPO<<MkO#${QPO<<MkO#%QQPO<<MkO#%VQPO<<MmO&qQPO<<MmO#%^QPO<<MmO#%cQPO<<MmO%mQPO<<MnO#%hQPO<<MnO&qQPO<<MoO#%pQPO<<MoO%mQPO<<MpO&qQPO<<MqO#%xQPOAN@`O!$rQPO1G2UOOQO1G2V1G2VO#*`QPO1G2]O!JTQPO,5>aOOQO,5>a,5>aOOQO-E;s-E;sOOQO7+'|7+'|OOQO<<Km<<KmOOQO7+)h7+)hOOQOANA[ANA[O#/PQPO,5>cOOQO,5>c,5>cOOQO-E;u-E;uO#/XQPOANAhOOQOANAiANAiOOQOANAsANAsOOQOANAyANAyOOQOANA}ANA}OOQOANBPANBPO#/^QPO,5>dOOQO,5>d,5>dO#/iQPO,5>dOOQO-E;v-E;vO#/nQPO1G4uO#/|QPO,5>eOOQO,5>e,5>eO(XQPO,5>eOOQO-E;w-E;wO#0WQPO1G4vO#0fQPO'#HzO#0mQPO,5?]OOQO1G3c1G3cOOQOANBSANBSOOQOANBUANBUO#0uQPOANBUO(XQPOANBZO!'lQPO'#H|O#0zQPO,5?_OOQOANB]ANB]O#1SQPOANB]O#1XQPOANB`O#1^QPOANBbOOQOAN?hAN?hO#1cQPOANCVO#1jQPO'#I`O#1rQPOANCVO#1wQPOANCVO#1|QPOANCVO#2WQPOANCXO#2_QPOANCXO#2dQPOANCXO#2iQPOANCXO#2sQPOANCYO#2xQPOANCYO(XQPOANCYO#2}QPOANCZO#3SQPOANCZO(XQPOANCZO#3XQPOANC[O#3^QPOANC]O(XQPOG25zOOQO7+'p7+'pO!$rQPO7+'pOOQO1G3{1G3{OOQO1G3}1G3}O(XQPOG27SOOQO1G4O1G4OO#3cQPO1G4OOOQO1G4P1G4PO(XQPO1G4PO#0fQPO,5>fOOQO,5>f,5>fOOQO-E;x-E;xOOQOG27pG27pO#3hQPO'#HdO#3mQPO'#IrO#3uQPOG27uO!'lQPO,5>hOOQO,5>h,5>hOOQO-E;z-E;zO(XQPOG27wO#3zQPOG27zO#4PQPOG27|O%mQPOG28qO#4UQPOG28qO#4ZQPO'#HrO#4bQPO,5>zOOQOG28qG28qO#4jQPOG28qO#4oQPOG28qO&qQPOG28sO#4vQPOG28sOOQOG28sG28sO#4{QPOG28sO#5QQPOG28sOOQOG28tG28tO%mQPOG28tO#5XQPOG28tOOQOG28uG28uO&qQPOG28uO#5^QPOG28uOOQOG28vG28vOOQOG28wG28wOOQOLD+fLD+fOOQO<<K[<<K[O#5cQPOLD,nOOQO7+)j7+)jOOQO7+)k7+)kOOQO1G4Q1G4QO(XQPO,5>OO!'lQPO'#H{O#5hQPO,5?^OOQOLD-aLD-aOOQO1G4S1G4SO#5pQPOLD-cO#5uQPOLD-fO#5uQPOLD-hO#5zQPOLD.]O#6PQPOLD.]O#4ZQPO,5>^OOQO,5>^,5>^OOQO-E;p-E;pO#6UQPOLD.]O#6ZQPOLD.]O#6bQPOLD._O#6gQPOLD._O#6lQPOLD._O#6qQPOLD._O#6xQPOLD.`O#6}QPOLD.`O#7SQPOLD.aO#7XQPOLD.aO#7^QPO!$(!YO#7cQPO1G3jO!'lQPO,5>gOOQO,5>g,5>gOOQO-E;y-E;yOOQO!$(!}!$(!}O#7nQPO'#HiO#7yQPO'#ItO#8RQPO!$(#QO#8WQPO!$(#SOOQO!$(#w!$(#wO#8]QPO!$(#wOOQO1G3x1G3xO%mQPO!$(#wO#8bQPO!$(#wOOQO!$(#y!$(#yO#8gQPO!$(#yO&qQPO!$(#yO#8lQPO!$(#yOOQO!$(#z!$(#zO%mQPO!$(#zOOQO!$(#{!$(#{O&qQPO!$(#{O#8qQPO!)9EtO(XQPO7+)UOOQO1G4R1G4RO(XQPO,5>TO#8vQPO'#H}O#9OQPO,5?`OOQO!)9Fl!)9FlOOQO!)9Fn!)9FnO#9WQPO!)9GcO#9]QPO!)9GcO#9bQPO!)9GcO#9gQPO!)9GeO#9lQPO!)9GeO#9qQPO!)9GeO#9vQPO!)9GfO#9{QPO!)9GgO(XQPO!.K;`OOQO<<Lp<<LpOOQO1G3o1G3oO#8vQPO,5>iOOQO,5>i,5>iOOQO-E;{-E;{O%mQPO!.K<}OOQO!.K<}!.K<}O#:QQPO!.K<}O&qQPO!.K=POOQO!.K=P!.K=PO#:VQPO!.K=POOQO!.K=Q!.K=QOOQO!.K=R!.K=RO#:[QPO!4/0zOOQO1G4T1G4TO#:aQPO!4/2iO#:fQPO!4/2iO#:kQPO!4/2kO#:pQPO!4/2kO#:uQPO!9A&fOOQO!9A(T!9A(TO%mQPO!9A(TOOQO!9A(V!9A(VO&qQPO!9A(VOOQO!?$JQ!?$JQO#:zQPO!?$KoO#;PQPO!?$KqOOQO!D6AZ!D6AZOOQO!D6A]!D6A]",
+     stateData: "#;U~O&tOS#aOS~OPQOQPORTOSUOTROUSOVVOWWOXXOYYOZZObgOpjOqmOrnOsoOt^Ox[O|cO!VkO!WlO!XpO!YqO!ZrO![sO!]tO!^uO!_vO!`wO!axO!byO!czO!d{O!e|O!f}O!g!OO!h!PO!i!QO!j!RO!k!SO!l!TO!m!UO!n!YO!o!ZO!p![O!q!]O!r!^O!s!_O!t!`O!u!aO!v!bO!w!dO!x!cO!ydO!|hO!}iO#O!VO#P!WO#Q!XO#R!eO#S!fO#T!hO#U!iO#eeO&`!kO&a!lO'Q!kO~Og!rOi!qOj!qOk!sOl!tOm!tO#V!pO#W!pO#X!pO#Y!pO#Z!pO#[!pO#]!pO#^!pO#_!pO#`!pO~Of!|Og#POh#QOn#OO#V!pO#W!pO#X!pO#Y!pO#Z!pO#[!pO#]!pO#^!pO#_!pO#`!pO#e!wO#g!xO#j!zO#p!yO#{#SO#|#RO&{!xO&|!xO~Of!|O#e!wO#g!xO#j!zO#p!yO&{!xO&|!xO~O#e#fO~Ov#kOw#iO~PYOv#kOw#iO&`'YX&r'YX'Q'YX~O!U#sO#e!wO#g!xO#j#rO#p!yO&{!xO&|!xO~O#j#xO$]#yOb$}Xc$}Xd$}Xe$}X&`$}X~Ob#}Oc#zOd#{Oe#|O&`$OO~O_$QO#|$TO%V$RO~P(XO#e$XO~O#e$YO~O#e!wO#g!xO#p!yO&{!xO&|!xO~O#e$jO~O$]#yO~O&`!kO'Q!kO~O#e%SO~O#e%TO~O#e%UO~O#j%VO#q%WO#r%WO#s%WO#t%WO#u%WO#v%WO#w%WO#x%WO#k&xX~O#}&xX&`&xX&r&xX'Q&xX#f&xX!{&xX!V&xX!W&xX$]&xX$d&xX$e&xX$f&xX$g&xX$h&xXy&xX$Q&xXP&xXQ&xXR&xXS&xXT&xXU&xXV&xXW&xXX&xXY&xXZ&xXb&xXp&xXq&xXr&xXs&xXt&xXx&xXz&xX|&xX!X&xX!Y&xX!Z&xX![&xX!]&xX!^&xX!_&xX!`&xX!a&xX!b&xX!c&xX!d&xX!e&xX!f&xX!g&xX!h&xX!i&xX!j&xX!k&xX!l&xX!m&xX!n&xX!o&xX!p&xX!q&xX!r&xX!s&xX!t&xX!u&xX!v&xX!w&xX!x&xX!y&xX!|&xX!}&xX#O&xX#P&xX#Q&xX#R&xX#S&xX#T&xX#U&xX#e&xX&a&xX$P&xX~P,`O#m%ZO#j&zX#q&zX#r&zX#s&zX#t&zX#u&zX#v&zX#w&zX#x&zX#}&zX~O&`&zX&r&zX'Q&zX#f&zX$]&zX$d&zX$e&zX$f&zX$g&zX$h&zX!{&zX!V&zX!W&zX#k&zXy&zX}&zX!R&zX!S&zX!T&zXP&zXQ&zXR&zXS&zXT&zXU&zXV&zXW&zXX&zXY&zXZ&zXb&zXp&zXq&zXr&zXs&zXt&zXx&zX|&zX!X&zX!Y&zX!Z&zX![&zX!]&zX!^&zX!_&zX!`&zX!a&zX!b&zX!c&zX!d&zX!e&zX!f&zX!g&zX!h&zX!i&zX!j&zX!k&zX!l&zX!m&zX!n&zX!o&zX!p&zX!q&zX!r&zX!s&zX!t&zX!u&zX!v&zX!w&zX!x&zX!y&zX!z&zX!|&zX!}&zX#O&zX#P&zX#Q&zX#R&zX#S&zX#T&zX#U&zX#e&zX&a&zX$Q&zXz&zX$P&zX~P2cO#{%^O~P(XO#{%^O~O#{%`O~P(XO#}%bO&`'PX&r'PX'Q'PX$Q'PX~O#f%eO#}%dO~O#f%gO#}%fO~O#}%hO~O#}%iO~O#}%jO~O#}%kO~O#}%lO~O$]%mO~O{%nO~PYOu%oO~PYOu%rO~PYOu%sO~PYO#j%VO$]%tO$d%tO$e%tO$f%tO$g%tO$h%tO~Of!|O~P)bO#j!zO~P+[O!R%yO!S%yO!T%yO}$aXP$aXQ$aXR$aXS$aXT$aXU$aXV$aXW$aXX$aXY$aXZ$aXb$aXp$aXq$aXr$aXs$aXt$aXx$aX|$aX!V$aX!W$aX!X$aX!Y$aX!Z$aX![$aX!]$aX!^$aX!_$aX!`$aX!a$aX!b$aX!c$aX!d$aX!e$aX!f$aX!g$aX!h$aX!i$aX!j$aX!k$aX!l$aX!m$aX!n$aX!o$aX!p$aX!q$aX!r$aX!s$aX!t$aX!u$aX!v$aX!w$aX!x$aX!y$aX!|$aX!}$aX#O$aX#P$aX#Q$aX#R$aX#S$aX#T$aX#U$aX#e$aX&`$aX&a$aX'Q$aX&r$aX#k$aX~O}%{O~O!{%|O~O[&SO]&SO^&SO_&SO~O#j&yX#q&yX#r&yX#s&yX#t&yX#u&yX#v&yX#w&yX#x&yX#}&yX&`&yX&r&yX'Q&yX~O#j&ZO~PAbO#g&^O~O#}&_O&`'aX&r'aX'Q'aX~O#}&aO~O!V&cO!W&bO~O#}&dO~O#}&eO~O#}&fO~O#}&gO~O#}&hO~O#}&iO~O#}&jO~O#}&kO~O#}&lO~O#}&mO~O#}&nO~O#}&oO~O#}&pO~O#}&qO~O#}&rO~P;_O#}&tO~O#}&uO~O#}&vO~O#}&wO~O#}&xO~O#}&yO~O#f&zO~O#f&{O&`#da&r#da'Q#da#}#da$Q#da~O#q%WO#r%WO#s%WO#t%WO#u%WO#v%WO#w%WO#x%WO~O#}#ha&`#ha&r#ha'Q#ha#f#ha!{#ha!V#ha!W#ha$]#ha$d#ha$e#ha$f#ha$g#ha$h#ha#k#hay#ha$Q#haP#haQ#haR#haS#haT#haU#haV#haW#haX#haY#haZ#hab#hap#haq#har#has#hat#hax#haz#ha|#ha!X#ha!Y#ha!Z#ha![#ha!]#ha!^#ha!_#ha!`#ha!a#ha!b#ha!c#ha!d#ha!e#ha!f#ha!g#ha!h#ha!i#ha!j#ha!k#ha!l#ha!m#ha!n#ha!o#ha!p#ha!q#ha!r#ha!s#ha!t#ha!u#ha!v#ha!w#ha!x#ha!y#ha!|#ha!}#ha#O#ha#P#ha#Q#ha#R#ha#S#ha#T#ha#U#ha#e#ha&a#ha$P#ha~PFOO`'POa'QO~O#k'RO~O#f'TO#}#za&`#za&r#za'Q#za$Q#za~O#f'TO~O'Q'VO~P&qO#}%bO&`'Pa&r'Pa'Q'Pa$Q'Pa~O$]%tO$d%tO$e%tO$f%tO$g%tO$h%tO~P,`O#k'fO~O!R%yO!S%yO!T%yO}$aaP$aaQ$aaR$aaS$aaT$aaU$aaV$aaW$aaX$aaY$aaZ$aab$aap$aaq$aar$aas$aat$aax$aa|$aa!V$aa!W$aa!X$aa!Y$aa!Z$aa![$aa!]$aa!^$aa!_$aa!`$aa!a$aa!b$aa!c$aa!d$aa!e$aa!f$aa!g$aa!h$aa!i$aa!j$aa!k$aa!l$aa!m$aa!n$aa!o$aa!p$aa!q$aa!r$aa!s$aa!t$aa!u$aa!v$aa!w$aa!x$aa!y$aa!|$aa!}$aa#O$aa#P$aa#Q$aa#R$aa#S$aa#T$aa#U$aa#e$aa&`$aa&a$aa'Q$aa&r$aa#k$aa~O!O'jO!P'iO!Q'kO~PYO#e!wO#g!xO#j!zO#p!yO&{!xO&|!xO~P;_O!z$uX!{$uX~PYO!z'wO!{'tO~O#k'yO~O#j'zO&`'_X&r'_X'Q'_X~O#j%VO&`%Pi&r%Pi'Q%Pi~O#j%VO&`%Qi&r%Qi'Q%Qi~O#g'{O~O#j'|O~PAbO#}&_O&`'aa&r'aa'Q'aa~O_(PO%V$RO'Q'VO~P(XO$P(SO~O#e(TO~O#e([O~O_(dO#e(cO~O_(gO~P(XO$P(iO~O#}(lO~O$P(pO~P(XO#g(tO~O#g(uO~O#k(vO~O#j%VO#q&ca#r&ca#s&ca#t&ca#u&ca#v&ca#w&ca#x&ca#}&ca&`&ca&r&ca'Q&ca#f&ca!{&ca!V&ca!W&ca$]&ca$d&ca$e&ca$f&ca$g&ca$h&ca#k&cay&ca$Q&caP&caQ&caR&caS&caT&caU&caV&caW&caX&caY&caZ&cab&cap&caq&car&cas&cat&cax&caz&ca|&ca!X&ca!Y&ca!Z&ca![&ca!]&ca!^&ca!_&ca!`&ca!a&ca!b&ca!c&ca!d&ca!e&ca!f&ca!g&ca!h&ca!i&ca!j&ca!k&ca!l&ca!m&ca!n&ca!o&ca!p&ca!q&ca!r&ca!s&ca!t&ca!u&ca!v&ca!w&ca!x&ca!y&ca!|&ca!}&ca#O&ca#P&ca#Q&ca#R&ca#S&ca#T&ca#U&ca#e&ca&a&ca$P&ca~O#f(xO#}#zi&`#zi&r#zi'Q#zi$Q#zi~O#}({O~O#}(|O~O#}(}O~O#})OO~O#})PO~O#})QO~O#})RO~O#})SO~Oy)TO~O#j%VO}$ci!R$ci!S$ci!T$ciP$ciQ$ciR$ciS$ciT$ciU$ciV$ciW$ciX$ciY$ciZ$cib$cip$ciq$cir$cis$cit$cix$ci|$ci!V$ci!W$ci!X$ci!Y$ci!Z$ci![$ci!]$ci!^$ci!_$ci!`$ci!a$ci!b$ci!c$ci!d$ci!e$ci!f$ci!g$ci!h$ci!i$ci!j$ci!k$ci!l$ci!m$ci!n$ci!o$ci!p$ci!q$ci!r$ci!s$ci!t$ci!u$ci!v$ci!w$ci!x$ci!y$ci!|$ci!}$ci#O$ci#P$ci#Q$ci#R$ci#S$ci#T$ci#U$ci#e$ci&`$ci&a$ci'Q$ci&r$ci#k$ci~O!Q)VO~PYOy)YO#j%VOP$wXQ$wXR$wXS$wXT$wXU$wXV$wXW$wXX$wXY$wXZ$wXb$wXp$wXq$wXr$wXs$wXt$wXx$wX|$wX!V$wX!W$wX!X$wX!Y$wX!Z$wX![$wX!]$wX!^$wX!_$wX!`$wX!a$wX!b$wX!c$wX!d$wX!e$wX!f$wX!g$wX!h$wX!i$wX!j$wX!k$wX!l$wX!m$wX!n$wX!o$wX!p$wX!q$wX!r$wX!s$wX!t$wX!u$wX!v$wX!w$wX!x$wX!y$wX!z$wX!{$wX!|$wX!}$wX#O$wX#P$wX#Q$wX#R$wX#S$wX#T$wX#U$wX#e$wX#}$wX&`$wX&a$wX'Q$wX~O#})[OP']XQ']XR']XS']XT']XU']XV']XW']XX']XY']XZ']Xb']Xp']Xq']Xr']Xs']Xt']Xx']X|']X!V']X!W']X!X']X!Y']X!Z']X![']X!]']X!^']X!_']X!`']X!a']X!b']X!c']X!d']X!e']X!f']X!g']X!h']X!i']X!j']X!k']X!l']X!m']X!n']X!o']X!p']X!q']X!r']X!s']X!t']X!u']X!v']X!w']X!x']X!y']X!z']X!{']X!|']X!}']X#O']X#P']X#Q']X#R']X#S']X#T']X#U']X#e']X&`']X&a']X'Q']X~O!z$ua!{$ua~PYO!O)^O#e!wO#g!xO#j!zO#p!yO&{!xO&|!xO~P;_O!z$zX~PYO!z)`O~O#g)aO~O#k)bO~O#g)cO~O#}&_O&`'ai&r'ai'Q'ai~O_)dO%V$RO'Q'VO~P(XO#})gO&`'bX&r'bX'Q'bX$Q'bX~O#})iO~O#})jO~O#})kO~O#})lO~O#})mO~O#})nO~O#})oO&`'cX&r'cX'Q'cX~O#e)qO~O#})rO&`'dX&r'dX'Q'dX~O#|)vO~P+[O#})wO~O#})xO~O#})zO~O#})}O~O#}*OO~O#}*PO~O#f*QO&`#dq&r#dq'Q#dq#}#dq$Q#dq~Of!|O#g!xO#j!zO#p!yO&{!xO&|!xO~O#e*SO$P*TO~P!CtO#e*WO$P*XO~P!CtO$P*[O~P(XO$P*^O~P(XO$P*`O~O$P*aO~O}*cO~O!Q*dO~PYO#j%VOP$xaQ$xaR$xaS$xaT$xaU$xaV$xaW$xaX$xaY$xaZ$xab$xap$xaq$xar$xas$xat$xax$xa|$xa!V$xa!W$xa!X$xa!Y$xa!Z$xa![$xa!]$xa!^$xa!_$xa!`$xa!a$xa!b$xa!c$xa!d$xa!e$xa!f$xa!g$xa!h$xa!i$xa!j$xa!k$xa!l$xa!m$xa!n$xa!o$xa!p$xa!q$xa!r$xa!s$xa!t$xa!u$xa!v$xa!w$xa!x$xa!y$xa!z$xa!{$xa!|$xa!}$xa#O$xa#P$xa#Q$xa#R$xa#S$xa#T$xa#U$xa#e$xa#}$xa&`$xa&a$xa'Q$xa~O#e!wO#g!xO#j!zO#p!yO&{!xO&|!xO'Q'VO~P;_O#})[OP']aQ']aR']aS']aT']aU']aV']aW']aX']aY']aZ']ab']ap']aq']ar']as']at']ax']a|']a!V']a!W']a!X']a!Y']a!Z']a![']a!]']a!^']a!_']a!`']a!a']a!b']a!c']a!d']a!e']a!f']a!g']a!h']a!i']a!j']a!k']a!l']a!m']a!n']a!o']a!p']a!q']a!r']a!s']a!t']a!u']a!v']a!w']a!x']a!y']a!z']a!{']a!|']a!}']a#O']a#P']a#Q']a#R']a#S']a#T']a#U']a#e']a&`']a&a']a'Q']a~O!z$za~PYO#k*iO~O#k*jO~O$Q*lO~O#e*nO'Q'VO~O#})gO&`'ba&r'ba'Q'ba$Q'ba~O#e*qO~O#e*sO~O#e*uO~O_*xO#e*wO'Q'VO~O#})oO&`'ca&r'ca'Q'ca~O_*}O'Q'VO~P(XO#})rO&`'da&r'da'Q'da~O#}+QO$Q'eX~O$Q+SO~O#e+TO~O#e+UO~O#}+VO~O$P+WO~O#}+XO$Q'gX~O$Q+ZO~O#g+_O~O#}+`O~P2cO#}+cO~O#}+dO~O#}+eO~P2cO#}+gO~O#}+hO~O#f+kO#}+jO~O#f+nO#}+mO~Oz+qOP$[!RQ$[!RR$[!RS$[!RT$[!RU$[!RV$[!RW$[!RX$[!RY$[!RZ$[!Rb$[!Rp$[!Rq$[!Rr$[!Rs$[!Rt$[!Rx$[!R|$[!R!V$[!R!W$[!R!X$[!R!Y$[!R!Z$[!R![$[!R!]$[!R!^$[!R!_$[!R!`$[!R!a$[!R!b$[!R!c$[!R!d$[!R!e$[!R!f$[!R!g$[!R!h$[!R!i$[!R!j$[!R!k$[!R!l$[!R!m$[!R!n$[!R!o$[!R!p$[!R!q$[!R!r$[!R!s$[!R!t$[!R!u$[!R!v$[!R!w$[!R!x$[!R!y$[!R!|$[!R!}$[!R#O$[!R#P$[!R#Q$[!R#R$[!R#S$[!R#T$[!R#U$[!R#e$[!R&`$[!R&a$[!R'Q$[!R~O#j%VOP$yiQ$yiR$yiS$yiT$yiU$yiV$yiW$yiX$yiY$yiZ$yib$yip$yiq$yir$yis$yit$yix$yi|$yi!V$yi!W$yi!X$yi!Y$yi!Z$yi![$yi!]$yi!^$yi!_$yi!`$yi!a$yi!b$yi!c$yi!d$yi!e$yi!f$yi!g$yi!h$yi!i$yi!j$yi!k$yi!l$yi!m$yi!n$yi!o$yi!p$yi!q$yi!r$yi!s$yi!t$yi!u$yi!v$yi!w$yi!x$yi!y$yi!z$yi!{$yi!|$yi!}$yi#O$yi#P$yi#Q$yi#R$yi#S$yi#T$yi#U$yi#e$yi#}$yi&`$yi&a$yi'Q$yi~O#e+uO'Q'VO~O#}+vO~O_+xO#e+wO'Q'VO~O#e+wO~O#})oO&`'ci&r'ci'Q'ci~O_+zO'Q'VO~P(XO#})rO&`'di&r'di'Q'di~O'Q'VO~P+[O#}+QO$Q'ea~O#e,OO~O#}+XO$Q'ga~O$P,VO~O#},WO~O#},XO~O$P,YO~P(XO#},[O$Q'SX~O$Q,^O~O#e,_O~O#e,`O$P,YO~P!CtO$P,aO~P(XO$Q,cO~O#e,dO~O#e,eO$P,aO~P!CtO$Q,fO~O$P,gO~O$Q,iO~O$P,jO~O$Q,lO~O$Q,mO~O#e,qO~O#f,tO~O#},uO$Q'fX~O$Q,wO~O$P,zO~O$P,{O~O#},}O~O'Q'VO~P%mO#},[O$Q'Sa~O#}-RO~O#}-SO~P2cO#}-UO~O#}-VO~O#}-WO~P2cO#}-YO~O#}-[O~O#}-]O~O#},uO$Q'fa~O$Q-bO~O#e-cO~O$Q-gO~O#e-hO~O$P-jO~O$P-jO~P(XO$Q-lO~O#e-mO~O$P-nO~O$P-nO~P(XO$Q-pO~O$P-qO~O$Q-rO~O$P-sO~O#e-tO~O#f-uO#}&Wi$Q&Wi~O#f-wO#}&]X$Q&]X~O#}-xO$Q'hX~O$Q-zO~O$Q-{O~O#}-|O~O#}.OO~O#}.PO~O#}.RO~O#}.UO~O#e-cO'Q'VO~O#}-xO$Q'ha~O$P.[O~O$Q.]O~O#e.^O~O$P._O~O$Q.`O~O#e.aO~O$Q.bO~O$Q.cO~O#}.gO~O#}.iO~O#}.jO~O$Q.kO~O$P.lO~O$Q.mO~O$P.nO~O#e.oO~O$Q.rO~O$Q.sO~O",
+     goto: "!%`'jPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP'k(RPPP(g+nPP/VP/V/VPPPPPPPPP'k2sPPP'kPP'k'k'k'k'k'k'k'k'k3VP3m4T4k4q5Q5YPPPPP5Q3m5e3m5{3m6R'k6i6u6u'k6{7P7T7T7T7Z7^'k7a7w'k'k'k7z8Q8QP'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k'k8['k'k'k'k'k'k8e'k'k8n'k9U'k'kPP9`:[:c:i;i;o;u;{<R<]<c<m<w<}=T=ZPPP=a=w>_>{G[KVPP+n! R! WP! v! y!!f!!i!!l!!o!!u'k!!{!#V!#d!#h!#r!#u!#x!#|!$V!$`!$c!$f!$i!$o!$uy!jO]^`a!o#g#h#o#p%{%}'j'm's'v)W)_*c+sQ!uPb+a*T*[*`,Y,g-j-q.[.lQ-P,[R-i-O'Z!|QRSTUVWXYZdghipqrsuvwxyz{|}!O!Q!R!S!T!U!X!Y!Z![!]!^!_!`!a!b!c!d!e!f!h!i!t!z!}#P#Q#S#r#x#y#}$Q%V%^%`%b%d%e%f%g%h%i%j%k%l%m&_&d&f&g&i&j&k&l&m&n&p&v&w&x&y'T'W(O(P(g(p(x({(|(})O)P)Q)T)d)i)k)m)r)}*O*P*X*^*a*{*}+W+X+`+d+e+h+k+n+q+v+z,S,V,a,j,t,u-S-W-_-n-s-u-w.U._.n'{!{QRSTUVWXYZcdghipqrsuvwxyz{|}!O!Q!R!S!T!U!X!Y!Z![!]!^!_!`!a!b!c!d!e!f!h!i!t!z!}#P#Q#S#i#k#r#s#x#y#{#|#}$Q%V%X%^%`%b%d%e%f%g%h%i%j%k%l%m%u%y%|&_&d&f&g&i&j&k&l&m&n&p&v&w&x&y'T'W'i'o't(O(P(g(p(x({(|(})O)P)Q)T)Y)[)d)i)k)m)r)}*O*P*X*^*a*f*{*}+W+X+`+d+e+h+k+n+q+v+z,S,V,a,j,t,u-S-W-_-n-s-u-w.U._.n(V!yQRSTUVWXYZcdghipqrstuvwxyz{|}!O!Q!R!S!T!U!X!Y!Z![!]!^!_!`!a!b!c!d!e!f!h!i!t!z!}#P#Q#S#i#k#r#s#x#y#{#|#}$Q%V%X%^%`%b%d%e%f%g%h%i%j%k%l%m%u%y%|&_&d&e&f&g&i&j&k&l&m&n&p&v&w&x&y'T'W'i'o't(O(P(g(i(p(x({(|(})O)P)Q)T)Y)[)d)i)k)m)r)}*O*P*X*^*a*f*{*}+Q+W+X+`+d+e+h+k+n+q+v+z+{,S,V,a,j,t,u-S-W-_-n-s-u-w.U._.nd#TQ*X*^*a,a,j-n-s._.nQ'X%bR(z'Wy]O]^`a!o#g#h#o#p%{%}'j'm's'v)W)_*c+sybO]^`a!o#g#h#o#p%{%}'j'm's'v)W)_*c+sy_O]^`a!o#g#h#o#p%{%}'j'm's'v)W)_*c+sQ#j^R#m_Q#vcQ%p#iQ%q#kQ%w#rR)U'i]#tc#i#k#r%y'i[#tc#i#k#r%y'iR%x#sy`O]^`a!o#g#h#o#p%{%}'j'm's'v)W)_*c+sQ#l^R#n_yaO]^`a!o#g#h#o#p%{%}'j'm's'v)W)_*c+sQ'l%{Q)X'mQ+r*cR,o+sX'k%{'m*c+sT&O#w&PT%}#w&PX'p%|'t)[*fR'x&PR'v&PyfO]^`a!o#g#h#o#p%{%}'j'm's'v)W)_*c+sR&U#zQ$UgR&Y#}S$Sg#}Q(Q&_R)e(OQ(j&qQ(k&rR)y(lQ,Q+WQ-`,uR-v-_y!gO]^`a!o#g#h#o#p%{%}'j'm's'v)W)_*c+sS-d,z,{Q.Y-xR.e.XQ!oOQ#g]Q#h^Q#o`Q#pad%R!o#g#h#o#p'm's)W)_+sQ'm%{Q's%}Q)W'jQ)_'vR+s*cS%Y!v%vR'O%YQ%c#TR'Y%cQ'W%bQ(O&_f(y'W(O*f*m*v*{+{,S-O-_.XQ*f)[Q*m)gQ*v)oQ*{)rQ+{+QQ,S+XQ-O,[Q-_,uR.X-xQ,]+aR-Q,]Q%z#uR'h%zQ&P#wR'u&PQ)]'qR*h)]Q&`$SQ'}&]T(R&`'}Q)h(TR*o)hQ)p(cS*y)p*zR*z)qQ)s(fS+O)s+PR+P)tQ+R)uR+}+RQ,v,QR-a,vQ+Y){R,U+YQ-y-dR.Z-yy!nO]^`a!o#g#h#o#p%{%}'j'm's'v)W)_*c+sy!mO]^`a!o#g#h#o#p%{%}'j'm's'v)W)_*c+sh!qP*T*[*`,Y,[,g-O-j-q.[.li!}Q%b'W*X*^*a,a,j-n-s._.nh#RQ%b'W*X*^*a,a,j-n-s._.nQ#VRQ#XSQ#ZTQ#]US#_VXS#aWYQ#eZQ#wdS$Sg#}Q$VhQ$WiQ$ZpQ$[qQ$]rQ$^sQ$`uQ$avQ$bwQ$cxQ$dyQ$ezQ$f{Q$g|Q$h}Q$i!OQ$k!QQ$l!RQ$m!SQ$n!TQ$o!UQ$p!XQ$q!YQ$r!ZQ$s![Q$t!]Q$u!^Q$v!_Q$w!`Q$x!aQ$y!bQ$z!cQ${!dQ$|!eQ$}!fQ%O!hQ%P!iQ%S!tS%[!z#rS%]!}#SQ%_#PQ%a#QQ&Q#xQ&R#yQ&]$QQ&|%VQ'S%^Q'U%`Q'Z%dQ'[%eQ']%fQ'^%gQ'_%hQ'`%iQ'a%jQ'b%kQ'c%lQ'd%mQ(Q&_Q(W&dQ(Y&fQ(Z&gQ(]&iQ(^&jQ(_&kQ(`&lQ(a&mQ(b&nQ(f&pQ(o&vQ(q&wQ(r&xQ(s&yQ(w'TS)e(O(PQ)t(gS){(p,VQ*R(xQ*U({Q*V(|Q*Y(}Q*Z)OQ*])PQ*_)QQ*b)TQ*k)dQ*p)iQ*r)kQ*t)mQ*|)rQ+[)}Q+]*OQ+^*PS+y*{*}U,P+W,u-_Q,T+XS,Z+`+dS,b+e+hQ,h+kQ,k+nQ,n+qQ,p+vQ,r+zQ,x,SQ-^,tQ-k-SQ-o-WQ.V-uQ.W-wR.d.U'W!vQRSTUVWXYZdghipqrsuvwxyz{|}!O!Q!R!S!T!U!X!Y!Z![!]!^!_!`!a!b!c!d!e!f!h!i!t!z!}#P#Q#S#x#y#}$Q%V%^%`%b%d%e%f%g%h%i%j%k%l%m&_&d&f&g&i&j&k&l&m&n&p&v&w&x&y'T'W(O(P(g(p(x({(|(})O)P)Q)T)d)i)k)m)r)}*O*P*X*^*a*{*}+W+X+`+d+e+h+k+n+q+v+z,S,V,a,j,t,u-S-W-_-n-s-u-w.U._.n[#qc#i#k#s%y'iQ%v#rQ&W#{Q&X#|Q&}%XQ'e%uW'n%|'t)[*fQ)Z'oR*e)Y'l!{QRSTUVWXYZcdhipqrsuvwxyz{|}!O!Q!R!S!T!U!X!Y!Z![!]!^!_!`!a!b!c!d!e!f!h!i!t!z!}#P#Q#S#i#k#r#s#x#y#{#|%V%X%^%`%b%d%e%f%g%h%i%j%k%l%m%u%y%|&d&f&g&i&j&k&l&m&n&p&v&w&x&y'T'W'i'o't(g(p(x({(|(})O)P)Q)T)Y)[)i)k)m)r)}*O*P*X*^*a*f*{*}+W+X+`+d+e+h+k+n+q+v+z,S,V,a,j,t,u-S-W-_-n-s-u-w.U._.nW$Pg#}&_(OQ$_tU&[$Q(P)dQ(X&eQ)u(iQ+|+QR,s+{V%X!v%Y%vQ#UQQ+f*XQ+l*^Q+p*aQ-T,aQ-Z,jQ.Q-nQ.T-sQ.h._R.q.nR#WRQ+b*TQ+i*[Q+o*`Q,|,YQ-X,gQ-}-jQ.S-qQ.f.[R.p.lR#YSR#[TR#^UQ#`VR#cXQ#bWR#dYY#uc#i#k#r'iR'g%yS%u#q%vQ&s$wX'o%|'t)[*fT'r%|'tS'q%|'tQ*g)[R+t*fR&V#zR&T#zT$Tg#}Q(U&bQ(V&cR)f(SQ(e&oQ(m&tR(n&uR(h&pR)v(iR,R+WQ)|(pR,y,VQ-e,zR-f,{x!lO]^`a!o#g#h#o#p%{%}'j'm's'v)W)_*c+sR%Q!m",
+     nodeNames: "⚠ DebugKW DebuginKW I2CInKW I2COutKW SerinKW SeroutKW OwinKW OwoutKW LcdinKW LcdoutKW LcdcmdKW BitKW NibKW ByteKW WordKW LowByteKW HighByteKW DataKW VarKW PinKW ConKW CrKW StrKW RepKW NumKW SNumKW WaitStrKW SkipKW SpstrKW AscKW DoneKW ReturnKW EndKW ExitKW StopKW DoKW LoopKW WhileKW UntilKW ForKW ToKW StepKW NextKW IfKW ThenKW ElseKW ElseifKW EndifKW AndKW OrKW XorKW NotKW GotoKW GosubKW PauseKW NapKW SleepKW ButtonKW RCTimeKW PollinKW PolloutKW PollrunKW PollwaitKW PollmodeKW CompareKW HighKW LowKW ToggleKW PwmKW RandomKW InputKW OutputKW ReverseKW ConfigPinKW CountKW FreqoutKW PulsoutKW PulsinKW ReadKW WriteKW LookupKW LookdownKW GetKW PutKW RunKW StoreKW SelectKW EndselectKW CaseKW BranchKW OnKW AuxioKW MainioKW IotermKW XOutKW DTMFOutKW ShiftInKW ShiftOutKW DecKW SDecKW HexKW SHexKW IHexKW ISHexKW BinKW SBinKW IBinKW ISBinKW Comment Program Debugin InputFormatExpr Identifier \\ DecimalInt Arith ArrayIndex ( ) LowByte . HighByte Number Char Plus Minus Mult Divide Mult100 Divide100 Shl Shr Debug OutputFormatExpr ? String , Serin [ ] Serout I2CIn I2COut Owin Owout Lcdin Lcdout Lcdcmd For ForHeader = LoopUntil Loop Until Logical Not Condition > < >= <= <> Paren_Logical UntilLoop DoUntil LoopWhile While WhileLoop DoWhile If IfTail Elseif Else Select Case CaseLabel ValuePattern ComparisonPattern RangePattern CaseElse CaseElseLabel VarDecl Defident ArrayType PinDecl ConDecl DataDecl DataLit DataAlloc DataLoc @ Branch OnGosub OnGoto Return Goto Gosub End Exit Stop Pause Nap Sleep Button RCTime Pollin Pollout Pollrun Pollwait Pollmode Compare High Low Toggle PWM Random Input Output Reverse Configpin Count Auxio Mainio Ioterm Freqout Pulsout Pulsin Read Write Lookup LookupTarget Lookdown Get Put Store Run XOut XOutParam DTMFOut Assignment ArrayIndex ShiftIn ShiftArg ShiftOut Label : Preprocessor",
+     maxTerm: 301,
      skippedNodes: [0,31,109],
      repeatNodeCount: 16,
-     tokenData: ",t~RnXY#PYZ#[]^#[pq#Prs#gst'Wtu'ouv(Zwx(oxy)Wyz)]z{)b{|)o|})t}!O)y!O!P*O!P!Q*T!Q![*b![!]*j!^!_*o!_!`+^!`!a+c!a!b+x!b!c+}!c!},S!}#O,e#O#P,j#P#Q,o#R#S,S#T#o,S~#UQ&m~XY#Ppq#P~#aQ&z~YZ#[]^#[~#jUOr#|s#O#|#O#P&X#P;'S#|;'S;=`'Q<%lO#|~$PVOr$frs&Ss#O$f#O#P%T#P;'S$f;'S;=`%|<%lO$f~$iVOr$frs%Os#O$f#O#P%T#P;'S$f;'S;=`%|<%lO$f~%TO#{~~%WRO;'S$f;'S;=`%a;=`O$f~%dWOr$frs%Os#O$f#O#P%T#P;'S$f;'S;=`%|;=`<%l$f<%lO$f~&PP;=`<%l$f~&XO#o~~&[RO;'S#|;'S;=`&e;=`O#|~&hWOr$frs&Ss#O$f#O#P%T#P;'S$f;'S;=`%|;=`<%l#|<%lO$f~'TP;=`<%l#|~']S&Y~OY'WZ;'S'W;'S;=`'i<%lO'W~'lP;=`<%l'W~'rR!Q!['{!c!i'{#T#Z'{~(QR&v~!Q!['{!c!i'{#T#Z'{~(^Q!Q!R(d!R!S(d~(iQ&u~!Q!R(d!R!S(d~(tS#a~OY(oZ;'S(o;'S;=`)Q<%lO(o~)TP;=`<%l(o~)]O#i~~)bO#j~~)gP#r~z{)j~)oO#t~~)tO#p~~)yO#|~~*OO#q~~*TO#l~~*YP#s~z{*]~*bO#u~~*gP&q~!Q![*b~*oO&X~~*tR$c~!^!_*}!_!`+S!`!a+X~+SO#w~~+XO$e~~+^O$f~~+cO$Z~~+hQ$b~!_!`+n!`!a+s~+sO$d~~+xO#v~~+}O#z~~,SO%O~~,XS#e~!Q![,S!c!},S#R#S,S#T#o,S~,jO$O~~,oO#f~~,tO$P~",
+     tokenData: ",t~RnXY#PYZ#[]^#[pq#Prs#gst'Wtu'ouv(Zwx(oxy)Wyz)]z{)b{|)o|})t}!O)y!O!P*O!P!Q*T!Q![*b![!]*j!^!_*o!_!`+^!`!a+c!a!b+x!b!c+}!c!},S!}#O,e#O#P,j#P#Q,o#R#S,S#T#o,S~#UQ&t~XY#Ppq#P~#aQ'Q~YZ#[]^#[~#jUOr#|s#O#|#O#P&X#P;'S#|;'S;=`'Q<%lO#|~$PVOr$frs&Ss#O$f#O#P%T#P;'S$f;'S;=`%|<%lO$f~$iVOr$frs%Os#O$f#O#P%T#P;'S$f;'S;=`%|<%lO$f~%TO#|~~%WRO;'S$f;'S;=`%a;=`O$f~%dWOr$frs%Os#O$f#O#P%T#P;'S$f;'S;=`%|;=`<%l$f<%lO$f~&PP;=`<%l$f~&XO#p~~&[RO;'S#|;'S;=`&e;=`O#|~&hWOr$frs&Ss#O$f#O#P%T#P;'S$f;'S;=`%|;=`<%l#|<%lO$f~'TP;=`<%l#|~']S&a~OY'WZ;'S'W;'S;=`'i<%lO'W~'lP;=`<%l'W~'rR!Q!['{!c!i'{#T#Z'{~(QR&|~!Q!['{!c!i'{#T#Z'{~(^Q!Q!R(d!R!S(d~(iQ&{~!Q!R(d!R!S(d~(tS#a~OY(oZ;'S(o;'S;=`)Q<%lO(o~)TP;=`<%l(o~)]O#j~~)bO#k~~)gP#s~z{)j~)oO#u~~)tO#q~~)yO#}~~*OO#r~~*TO#m~~*YP#t~z{*]~*bO#v~~*gP#g~!Q![*b~*oO&`~~*tR$e~!^!_*}!_!`+S!`!a+X~+SO#x~~+XO$g~~+^O$h~~+cO$]~~+hQ$d~!_!`+n!`!a+s~+sO$f~~+xO#w~~+}O#{~~,SO%V~~,XS#e~!Q![,S!c!},S#R#S,S#T#o,S~,jO$P~~,oO#f~~,tO$Q~",
      tokenizers: [0],
      topRules: {"Program":[0,110]},
      specialized: [{term: 113, get: (value, stack) => (keyword(value) << 1), external: keyword},{term: 113, get: (value, stack) => (format_keyword(value) << 1), external: format_keyword}],
      tokenPrec: 0
    });
+   function isNonconstType(type) {
+       return typeof (type) === 'string' || type.key === 'array';
+   }
+   function typeToString(type) {
+       if (typeof (type) !== 'string') {
+           if (type.key == 'array')
+               return `${typeToString(type.type)}(${type.size})`;
+           else
+               return type.value.toString();
+       }
+       return type.toUpperCase();
+   }
+   /**
+    * Get the literal text of some node.
+    */
+   const getNodeText = (node, editor) => { var _a, _b; return editor.doc.sliceString((_a = node === null || node === void 0 ? void 0 : node.from) !== null && _a !== void 0 ? _a : 0, (_b = node === null || node === void 0 ? void 0 : node.to) !== null && _b !== void 0 ? _b : 0); };
+   function parseType(node, editor) {
+       var _a;
+       if (node.name === "ArrayType") {
+           if (!node.firstChild)
+               throw "unreachable";
+           if (!((_a = node.lastChild) === null || _a === void 0 ? void 0 : _a.prevSibling))
+               throw "unreachable";
+           const type = parseType(node.firstChild, editor);
+           const sizeTxt = getNodeText(node.lastChild.prevSibling, editor);
+           const size = Number.parseInt(sizeTxt);
+           return { key: 'array', type: type, size: size };
+       }
+       return getNodeText(node, editor);
+   }
+   /**
+    * Extract a 'defident' if one exists within a node.
+    * @returns [raw_text, ident, type, doc] if the defident was found, [null, null, null, null] otherwise
+    */
+   function extractDefident(node, editor) {
+       var _a, _b;
+       let doc = null;
+       if (((_a = node.prevSibling) === null || _a === void 0 ? void 0 : _a.name) === "Comment") {
+           const txt = getNodeText(node.prevSibling, editor);
+           if (txt.startsWith("''")) {
+               doc = txt.substring(2);
+           }
+       }
+       if (node.name === 'VarDecl') {
+           if (!node.lastChild)
+               throw "variable declarations must have a last child (their type)";
+           const id = getNodeText(node.firstChild, editor);
+           const ty = parseType(node.lastChild, editor);
+           return [id, id.toLowerCase(), ty, doc, 'Var'];
+       }
+       if (node.name === 'PinDecl'
+           || node.name === 'ConDecl') {
+           const id = getNodeText(node.firstChild, editor);
+           const value = getNodeText(node.lastChild, editor);
+           const type = {
+               key: 'const',
+               type: node.name === 'PinDecl' ? 'pin' : 'con',
+               value: Number.parseInt(value)
+           };
+           return [id, id.toLowerCase(), type, doc, node.name.substring(0, 3)];
+       }
+       if (node.name === 'Label') {
+           const id = getNodeText(node.firstChild, editor);
+           return [id, id.toLowerCase(), 'label', doc, 'Label'];
+       }
+       if (node.name === 'DataDecl' && ((_b = node.firstChild) === null || _b === void 0 ? void 0 : _b.name) === 'Defident') {
+           const id = getNodeText(node.firstChild, editor);
+           return [id, id.toLowerCase(), 'word', doc, 'Data'];
+       }
+       return [null, null, null, null, null];
+   }
+   /**
+    * All of the predefined items which come bundled with PBasic
+    */
+   const predefined = [
+       // input variables
+       { name: "in0", case_name: "IN0", type: "word" },
+       { name: "in1", case_name: "IN1", type: "word" },
+       { name: "in2", case_name: "IN2", type: "word" },
+       { name: "in3", case_name: "IN3", type: "word" },
+       { name: "in4", case_name: "IN4", type: "word" },
+       { name: "in5", case_name: "IN5", type: "word" },
+       { name: "in6", case_name: "IN6", type: "word" },
+       { name: "in7", case_name: "IN7", type: "word" },
+       { name: "in8", case_name: "IN8", type: "word" },
+       { name: "in9", case_name: "IN9", type: "word" }
+   ];
+   /**
+    * Get all definitions that occur in a syntax node.
+    */
+   function getDefinitions(node, editor) {
+       // Prefill with predefined variables
+       let defs = {};
+       predefined.forEach(x => {
+           defs[x.name] = Object.assign(Object.assign({}, x), { from: 0, to: 0, declarator: 'Var' });
+       });
+       // Internal function: implements the recursion
+       function loadDefinitions(node) {
+           // Check if there is a defident at this node
+           const [txt, id, type, doc, decl] = extractDefident(node, editor);
+           if (id && txt && type && decl) {
+               // If this is a new defident, add it with this positioning
+               if (!defs[id])
+                   defs[id] = {
+                       name: id,
+                       case_name: txt,
+                       type: type,
+                       from: node.from,
+                       to: node.to,
+                       doc: doc,
+                       declarator: decl
+                   };
+           }
+           else {
+               // Iterate through child nodes and load their definitions
+               let child = node.firstChild;
+               while (child !== null) {
+                   loadDefinitions(child);
+                   child = child.nextSibling;
+               }
+           }
+       }
+       loadDefinitions(node);
+       return defs;
+   }
+   /**
+    * Gets the set of style tags for PBasic.
+    * This exists to allow for algorithmic modifications of the style tag list
+    * compared to an object literal.
+    */
    function getStyleTags() {
        let out = {
            Identifier: tags.variableName,
@@ -21908,24 +23908,164 @@
        formatKWTypes.forEach(x => out[x] = tags.keyword);
        return out;
    }
+   /**
+    * The PBasic language instance
+    */
    const PBasic = LRLanguage.define({
        name: 'pbasic',
        parser: parser.configure({
            props: [
-               styleTags(getStyleTags())
+               styleTags(getStyleTags()),
+               foldNodeProp.add({
+                   Loop: foldInside,
+                   UntilLoop: foldInside,
+                   WhileLoop: foldInside,
+                   For: foldInside,
+                   If: foldInside,
+                   Elseif: foldInside,
+                   Else: foldInside,
+                   Select: foldInside,
+                   Case: foldInside,
+                   CaseElse: foldInside,
+                   DataLit: n => { var _a, _b; return ({ from: (_a = n.from) !== null && _a !== void 0 ? _a : 0, to: (_b = n.to) !== null && _b !== void 0 ? _b : 0 }); },
+                   Label: n => {
+                       // TODO: understand why this code refused to run
+                       let r = n;
+                       console.log("AAAAAAAAAAAAAAAAAA");
+                       while (r && r.name !== "Goto" && r.name !== "Return") {
+                           r = r.nextSibling;
+                           console.log(r);
+                       }
+                       if (!r)
+                           return null;
+                       return { from: n.from, to: r === null || r === void 0 ? void 0 : r.to };
+                   }
+               })
            ]
        }),
        languageData: {
            commentTokens: { line: "'" }
        }
    });
+   /**
+    * The base completion map which will be added onto when definitions
+    * are factored in.
+    */
+   const pbasicCompletionMap = [
+       ...kws.map(x => { return { label: x.toUpperCase(), type: "keyword" }; }),
+       ...formatKWs.map(x => { return { label: x.toUpperCase(), type: "keyword" }; })
+   ];
+   /**
+    * The getter for all completions, including definitions, somewhere in a document.
+    */
+   function completions(context) {
+       // Do not suggest inside of a comment
+       if (context.tokenBefore(['Comment']) !== null)
+           return null;
+       // Get the definitions. 
+       // TODO: This should be memoized, if possible.
+       const tree = syntaxTree(context.state);
+       const definitions = getDefinitions(tree.topNode, context.state);
+       // Get the completions associated with the given definitions.
+       const defCompletes = Object.values(definitions).map(x => ({ label: x.case_name, type: "variable" }));
+       // Return the completions using the complete from list predefined.
+       return completeFromList(pbasicCompletionMap.concat(defCompletes))(context);
+   }
+   /**
+    * The completion extension for PBasic.
+    */
    const pbasicCompletion = PBasic.data.of({
-       autocomplete: completeFromList([
-           ...kws.map(x => { return { label: x.toUpperCase(), type: "keyword" }; })
-       ])
+       autocomplete: completions
    });
+   const pbasicHover = hoverTooltip((view, pos, side) => {
+       // TODO: this better
+       const tree = syntaxTree(view.state);
+       const definitions = getDefinitions(tree.topNode, view.state);
+       // Find definition containing this position.
+       const node_here = tree.cursorAt(pos, side).node;
+       if (node_here.name !== "Identifier")
+           return null;
+       const id = getNodeText(node_here, view.state).toLowerCase();
+       if (!definitions[id])
+           return null;
+       return {
+           pos: node_here.from,
+           end: node_here.to,
+           above: true,
+           create(view) {
+               let txt = definitions[id].declarator.toUpperCase() + ' '
+                   + definitions[id].case_name;
+               if (definitions[id].type !== 'label') {
+                   if (isNonconstType(definitions[id].type))
+                       txt += ': ';
+                   else
+                       txt += " = ";
+                   txt += typeToString(definitions[id].type);
+               }
+               if (definitions[id].doc)
+                   txt += ` '' ${definitions[id].doc}`;
+               return typeHoverDOMProvider(view.state, txt);
+           }
+       };
+   });
+   let typeHoverDOMProvider = (view, text) => {
+       let dom = document.createElement('div');
+       dom.textContent = text;
+       return { dom };
+   };
+   /**
+    * The linter extension for PBasic.
+    */
+   const pbasicLinter = linter(view => {
+       let diagnostics = [];
+       // Get the definitions.
+       // TODO: This should be memoized, if possible.
+       const tree = syntaxTree(view.state);
+       const definitions = getDefinitions(tree.topNode, view.state);
+       // Iterate through the syntax tree.
+       tree.cursor().iterate(node => {
+           // Report invalid syntax
+           if (node.name === "⚠")
+               diagnostics.push({
+                   from: node.from,
+                   to: node.to,
+                   severity: "error",
+                   message: "Invalid syntax"
+               });
+           // Report unknown identifiers
+           else if (node.name === "Identifier") {
+               const id = getNodeText(node.node, view.state);
+               if (!definitions[id.toLowerCase()])
+                   diagnostics.push({
+                       from: node.from,
+                       to: node.to,
+                       severity: "error",
+                       message: `Unknown item ${id}`
+                   });
+           }
+           // Handle all other nodes
+           else {
+               // If this node is a definition syntax
+               const [txt, id] = extractDefident(node.node, view.state);
+               if (id) {
+                   // Report double definitions
+                   if (definitions[id].from !== node.from || definitions[id].to !== node.to)
+                       diagnostics.push({
+                           from: node.from,
+                           to: node.to,
+                           severity: "error",
+                           message: `Double definition of item ${txt}`
+                       });
+               }
+           }
+       });
+       return diagnostics;
+   });
+   /**
+    * The language support instance for PBasic.
+    */
    function pbasic() {
-       return new LanguageSupport(PBasic, [pbasicCompletion]);
+       return new LanguageSupport(PBasic, [pbasicCompletion, pbasicLinter, pbasicHover]);
    }
 
    new EditorView({
@@ -21943,21 +24083,12 @@
            EditorState.allowMultipleSelections.of(true),
            pbasic(),
            lintGutter(),
-           linter(view => {
-               let diagnostics = [];
-               syntaxTree(view.state).cursor().iterate(node => {
-                   if (node.name == "⚠")
-                       diagnostics.push({
-                           from: node.from,
-                           to: node.to,
-                           severity: "error",
-                           message: "!"
-                       });
-               });
-               return diagnostics;
-           }),
+           codeFolding(),
+           foldGutter(),
            keymap.of([
-               ...lintKeymap
+               ...defaultKeymap,
+               ...lintKeymap,
+               ...foldKeymap
            ])
        ],
        parent: document.body

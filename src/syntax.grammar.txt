@@ -113,10 +113,10 @@ VarDecl { Defident VarKW type }
 
 DataDecl { Defident? DataKW DataLit }
 DataLit { comma_sep<DataAlloc | (WordKW? expr ~data_alloc) | DataLoc> | String }
-DataLoc { "@" decimal_int }
+DataLoc { "@" DecimalInt }
 
 // TODO: this conflicts very oddly with ArrayIndex! How should this be approached?
-DataAlloc { WordKW? lit ~data_alloc "(" decimal_int ")" }
+DataAlloc { WordKW? lit ~data_alloc "(" DecimalInt ")" }
 
 // control flow
 
@@ -331,8 +331,8 @@ DTMFOut {
 InputFormatExpr
 {
   (std_format_header | NumKW | SNumKW) Identifier |
-  StrKW Identifier "\\" decimal_int ("\\" decimal_int)? |
-  WaitStrKW Identifier ("\\" decimal_int)? |
+  StrKW Identifier "\\" DecimalInt ("\\" DecimalInt)? |
+  WaitStrKW Identifier ("\\" DecimalInt)? |
   SkipKW expr |
   SpstrKW expr 
 }
@@ -386,12 +386,12 @@ paren { "(" expr ")" }
 
 // types 
 type { ArrayType | base_type }
-ArrayType { base_type "(" decimal_int ")" }
+ArrayType { base_type "(" DecimalInt ")" }
 base_type { BitKW | NibKW | ByteKW | WordKW }
 
 // general utilities
 comma_sep<item> { item ("," newline* item)* }
-Number { decimal_int | binary_int | hex_int }
+Number { DecimalInt | binary_int | hex_int }
 
 Defident { Identifier }
 
@@ -400,7 +400,7 @@ Defident { Identifier }
   Identifier { $[a-zA-Z_] $[a-zA-Z_0-9]* }
 
   // Numbers
-  decimal_int { $[0-9]+ }
+  DecimalInt { $[0-9]+ }
   binary_int { "%" $[01]+ }
   hex_int { "$" $[0-9A-Fa-f]+ }
 
