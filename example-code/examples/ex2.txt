@@ -1,0 +1,61 @@
+' {$STAMP BS2}
+' {$PBASIC 2.5}
+'** 
+'** FREQOUT 9, 1000, 1047, 2093
+'** FREQOUT 9, 1000, 1319, 2637
+'** FREQOUT 9, 1000, 1568, 3136
+'** FREQOUT 9, 1000, 2093, 4186
+
+counter VAR BYTE
+note VAR WORD
+'** 
+'** frequencies DATA WORD 2093, WORD 2093, WORD 3136, WORD 3136,
+'**  WORD 3520, WORD 3520, WORD 3136
+'** 
+'** FOR counter = 0 TO 12 STEP 2
+'** READ frequencies +counter, WORD note
+'** FREQOUT 9, 500, note
+'** NEXT
+
+Wholenote VAR WORD
+time VAR NIB
+
+'Beethoven's Fifth
+Frequencies DATA WORD 1568, WORD 1568, WORD 1568, WORD 1244,
+			WORD 1397, WORD 1397, WORD 1397, WORD 1175
+Durations DATA  4, 4, 4, 1, 4, 4, 4, 1
+
+'Pirates of the Caribbean
+'Frequencies DATA WORD 1319, WORD 1568, WORD 1760, WORD 1760,
+'			WORD 1760, WORD 1976, WORD 2093, WORD 2093, WORD 2093,
+'			WORD 2349, WORD 1976, WORD 1976, WORD 1760, WORD 1568, WORD 1760
+'Durations DATA  8, 8, 4, 4, 8, 8, 4, 4, 8, 8, 4, 4, 8, 8, 4
+
+Wholenote = 2000
+'Normal
+FOR counter = 0 TO 7
+	READ Frequencies +counter*2, WORD note
+	READ Durations +counter, time
+	FREQOUT 9, Wholenote/time, note
+	PAUSE 10
+NEXT
+PAUSE 500
+
+Wholenote = 1000
+'Faster
+FOR counter = 0 TO 7
+	READ Frequencies +counter*2, WORD note
+	READ Durations +counter, time
+	FREQOUT 9, Wholenote/time, note
+	PAUSE 10
+NEXT
+PAUSE 500
+
+Wholenote = 2000
+'Up one octave
+FOR counter = 0 TO 7
+	READ Frequencies +counter*2, WORD note
+	READ Durations +counter, time
+	FREQOUT 9, Wholenote/time, note*2
+	PAUSE 10
+NEXT
