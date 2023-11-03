@@ -128,3 +128,7 @@ out
 .yarn/install-state.gz
 .pnp.*
 codemirror-test/editor.bundle.js
+dist/index.cjs
+dist/index.d.cts
+dist/index.d.ts
+dist/index.js

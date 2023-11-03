@@ -360,16 +360,18 @@ const pbasicHover = hoverTooltip((view, pos, side) => {
             if (definitions[id].doc)
                 txt += ` '' ${definitions[id].doc}`
 
-            return typeHoverDOMProvider(view.state, txt)
+            return typeHoverDOMProvider.value(view.state, txt)
         }
     }
 })
 
-export let typeHoverDOMProvider = (view: EditorState, text: string) => 
-{
-    let dom = document.createElement('div')
-    dom.textContent = text
-    return {dom}
+export let typeHoverDOMProvider = {
+    value(view: EditorState, text: string) 
+    {
+        let dom = document.createElement('div')
+        dom.textContent = text
+        return {dom}
+    }
 }
 
 /**

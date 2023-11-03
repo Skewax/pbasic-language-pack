@@ -338,14 +338,16 @@ const pbasicHover = view.hoverTooltip((view, pos, side) => {
             }
             if (definitions[id].doc)
                 txt += ` '' ${definitions[id].doc}`;
-            return typeHoverDOMProvider(view.state, txt);
+            return typeHoverDOMProvider.value(view.state, txt);
         }
     };
 });
-let typeHoverDOMProvider = (view, text) => {
-    let dom = document.createElement('div');
-    dom.textContent = text;
-    return { dom };
+let typeHoverDOMProvider = {
+    value(view, text) {
+        let dom = document.createElement('div');
+        dom.textContent = text;
+        return { dom };
+    }
 };
 /**
  * The linter extension for PBasic.

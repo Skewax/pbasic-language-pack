@@ -1,6 +1,6 @@
 {
   "name": "pbasic-language-pack",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "A basic language package for the PBasic programming language",
   "type": "module",
   "main": "dist/index.cjs",

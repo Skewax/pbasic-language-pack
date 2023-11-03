@@ -11,8 +11,10 @@ type EditorState = Parameters<Extract<Parameters<typeof foldNodeProp.add>[0]>>[1
  * The PBasic language instance
  */
 declare const PBasic: LRLanguage;
-declare let typeHoverDOMProvider: (view: EditorState, text: string) => {
-    dom: HTMLDivElement;
+declare let typeHoverDOMProvider: {
+    value(view: EditorState, text: string): {
+        dom: HTMLDivElement;
+    };
 };
 /**
  * The language support instance for PBasic.
